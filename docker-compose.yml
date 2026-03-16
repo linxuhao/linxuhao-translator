@@ -18,6 +18,12 @@ services:
     build:
       context: ./gateway
     container_name: api_gateway
+    deploy:
+      resources:
+        limits:
+          # 防止网关吃掉太多 CPU
+          cpus: '2'
+          memory: 512M
     ports:
       - "5000:5000"
     restart: unless-stopped
@@ -52,9 +58,6 @@ services:
       --max-model-len 32768
       --gpu-memory-utilization 0.95
       --max-num-seqs 32
-      --enable-auto-tool-choice 
-      --tool-call-parser qwen3_xml
-      --reasoning-parser qwen3
       --served-model-name qwen3
       --trust-remote-code
     restart: unless-stopped

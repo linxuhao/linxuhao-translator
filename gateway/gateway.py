@@ -1,15 +1,17 @@
-# ==========================================
 # 文件名: gateway/gateway.py
-# 核心变更: 将 localhost 修改为 Docker Compose 内网服务发现的 hostname
-# ==========================================
+# 修复：兼容 vLLM 的 reasoning 字段提取，确保在开启 reasoning-parser 时依然能获取翻译结果。
+
 import json
+import logging
 from fastapi import FastAPI, UploadFile, File, Form, Response
 from fastapi.responses import HTMLResponse
 import httpx
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("gateway")
+
 app = FastAPI()
 
-# 🎯 核心修复：使用 Docker 内部 DNS 直接互联，无需经过宿主机端口映射
 BRAIN_URL = "http://vllm_qwen:8000/v1/chat/completions"
 ASR_URL = "http://whisper_rocm:8000/asr"
 TTS_URL = "http://kokoro_rocm:8000/tts"
@@ -38,27 +40,35 @@ async def process_voice(
         brain_payload = {
             "model": "qwen3",
             "messages": [
-                {
-                    "role": "system",
-                    "content": f"""你是一个智能同传路由器。
-                    当前用户的母语是: {native_lang}。
-                    对话的另一方（外语）预期是: {last_foreign_lang}。
-                    
-                    执行逻辑：
-                    1. 识别用户输入文本的实际语种。
-                    2. 如果输入是母语({native_lang})，将其翻译为 {last_foreign_lang}。
-                    3. 如果输入是外语，将其翻译为 {native_lang}，并更新外语语种标签。
-                    
-                    必须严格返回JSON，格式为: 
-                    {{"target_tts_lang": "发音语种代码(如 fr, zh-cn)", "text": "纯净的翻译结果", "detected_foreign_lang": "识别出的外语代码(如 fr, en)"}}"""
-                },
+                {"role": "system", "content": f"你是一个同传机器人。中法互译。输入母语({native_lang})译为外语({last_foreign_lang})，反之亦然。必须严格返回JSON格式: {{\"target_tts_lang\": \"语种\", \"text\": \"翻译结果\", \"detected_foreign_lang\": \"语种\"}}。禁止返回其他内容。"},
                 {"role": "user", "content": asr_text}
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.1
+            "temperature": 0.1,
+            "tool_choice": "none" 
         }
+        
         brain_resp = await client.post(BRAIN_URL, json=brain_payload)
-        trans_data = json.loads(brain_resp.json()["choices"][0]["message"]["content"])
+        resp_json = brain_resp.json()
+        
+        try:
+            message = resp_json["choices"][0]["message"]
+            
+            # 🎯 核心逻辑升级：双字段提取
+            # 先拿 content，如果 content 为空就拿 reasoning
+            raw_content = message.get("content") or message.get("reasoning")
+            
+            if not raw_content:
+                logger.error(f"无法从响应中找到有效内容。原始数据: {resp_json}")
+                return Response(status_code=500, content="大脑未生成翻译内容")
+            
+            # 兼容处理：如果 reasoning 中带有 Markdown 代码块标签，先清洗
+            clean_content = raw_content.replace("```json", "").replace("```", "").strip()
+            trans_data = json.loads(clean_content)
+            
+        except Exception as e:
+            logger.error(f"解析失败: {str(e)}, 原始内容: {resp_json}")
+            return Response(status_code=500, content="翻译大脑格式化异常")
 
         # 3. 发声层
         tts_payload = {
