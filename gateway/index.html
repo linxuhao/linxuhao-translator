@@ -1,83 +1,195 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>海外同传</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>随身翻译官</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #121212; color: #fff; }
-        #recordBtn { width: 180px; height: 180px; border-radius: 50%; background: #0a84ff; color: white; font-size: 24px; border: none; box-shadow: 0 0 30px rgba(10, 132, 255, 0.4); outline: none; user-select: none; -webkit-tap-highlight-color: transparent; transition: 0.2s; }
-        #recordBtn:active { background: #ff453a; transform: scale(0.92); box-shadow: 0 0 40px rgba(255, 69, 58, 0.6); }
-        #status { margin-bottom: 40px; font-size: 20px; font-weight: 300; letter-spacing: 2px; }
-        #langState { position: absolute; top: 20px; font-size: 12px; color: #888; }
+        * { box-sizing: border-box; touch-action: manipulation; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 0;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 100vh; background-color: #f5f5f7; color: #333;
+        }
+        .header { position: absolute; top: 5%; text-align: center; }
+        h1 { margin: 0; font-size: 28px; color: #1d1d1f; }
+        .lang-indicator {
+            margin-top: 8px; font-size: 16px; color: #86868b;
+            background: #e8e8ed; padding: 4px 12px; border-radius: 12px;
+        }
+        .record-btn {
+            width: 220px; height: 220px; border-radius: 50%;
+            background: linear-gradient(135deg, #007aff, #005bb5);
+            color: white; font-size: 28px; font-weight: bold;
+            border: none; box-shadow: 0 10px 30px rgba(0, 122, 255, 0.4);
+            transition: all 0.2s ease; display: flex; align-items: center; justify-content: center;
+            user-select: none; -webkit-user-select: none;
+        }
+        .record-btn:active, .record-btn.recording {
+            transform: scale(0.95); background: linear-gradient(135deg, #ff3b30, #c92a20);
+            box-shadow: 0 5px 15px rgba(255, 59, 48, 0.4);
+        }
+        .status-text { margin-top: 30px; font-size: 20px; font-weight: 500; height: 30px; }
+        #latency-dashboard {
+            position: absolute; bottom: 5%; width: 90%;
+            background: #fff; padding: 15px; border-radius: 16px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            font-size: 13px; color: #666; font-family: monospace; line-height: 1.6;
+            text-align: center;
+        }
+        .metric { font-weight: bold; color: #1d1d1f; }
     </style>
 </head>
 <body>
-    <div id="langState">当前对话语种: fr</div>
-    <div id="status">准备就绪</div>
-    <button id="recordBtn">按住说话</button>
-    <audio id="audioPlayer" autoplay></audio>
+
+    <div class="header">
+        <h1>🗣️ 随身翻译官</h1>
+        <div class="lang-indicator" id="lang-display">环境语种: 法语 (fr)</div>
+    </div>
+
+    <button class="record-btn" id="recordBtn">按住说话</button>
+    <div class="status-text" id="statusText">系统已就绪</div>
+
+    <div id="latency-dashboard">
+        📊 算力监控面板待命中...<br>
+        请进行第一次对话以激活探针。
+    </div>
 
     <script>
         let mediaRecorder;
         let audioChunks = [];
+        let currentForeignLang = "fr"; 
         
-        // 🎯 核心修复：前端状态管理器
-        const nativeLang = "zh-cn";
-        let lastForeignLang = "fr"; // 默认起始语种
-        
-        const btn = document.getElementById('recordBtn');
-        const status = document.getElementById('status');
-        const player = document.getElementById('audioPlayer');
-        const langState = document.getElementById('langState');
+        const recordBtn = document.getElementById('recordBtn');
+        const statusText = document.getElementById('statusText');
+        const dashboard = document.getElementById('latency-dashboard');
+        const langDisplay = document.getElementById('lang-display');
 
-        btn.addEventListener('touchstart', async (e) => {
-            e.preventDefault();
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            mediaRecorder.start();
-            status.innerText = "正在聆听...";
-            btn.style.background = "#ff453a";
-
-            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-        });
-
-        btn.addEventListener('touchend', async (e) => {
-            e.preventDefault();
-            mediaRecorder.stop();
-            status.innerText = "AI 翻译中...";
-            btn.style.background = "#0a84ff";
-            
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                audioChunks = [];
+        async function initAudio() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
                 
-                const formData = new FormData();
-                formData.append("audio_file", audioBlob, "record.webm");
-                // 提交状态
-                formData.append("native_lang", nativeLang);
-                formData.append("last_foreign_lang", lastForeignLang);
+                mediaRecorder.ondataavailable = event => {
+                    if (event.data.size > 0) audioChunks.push(event.data);
+                };
 
-                try {
-                    const res = await fetch("/api/voice", { method: "POST", body: formData });
-                    if (!res.ok) throw new Error("响应异常");
-                    
-                    // 🎯 核心修复：提取后端返回的最新语种状态，刷新前端记忆
-                    const newForeignLang = res.headers.get("X-Foreign-Lang");
-                    if (newForeignLang) {
-                        lastForeignLang = newForeignLang;
-                        langState.innerText = "当前对话语种: " + lastForeignLang;
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    audioChunks = [];
+                    await sendAudioToServer(audioBlob);
+                };
+            } catch (err) {
+                statusText.innerText = "⚠️ 请允许麦克风权限";
+                statusText.style.color = "red";
+            }
+        }
+
+        // 🎯 手机端原生 TTS 发声模块
+        function speakText(text, langCode) {
+            if (!('speechSynthesis' in window)) {
+                statusText.innerText = "❌ 浏览器不支持语音";
+                return;
+            }
+
+            // BCP 47 语种映射
+            const langMap = {
+                "zh-cn": "zh-CN",
+                "fr": "fr-FR",
+                "en": "en-US",
+                "es": "es-ES"
+            };
+            const systemLang = langMap[langCode] || langCode;
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = systemLang;
+            utterance.rate = 1.0; 
+
+            utterance.onstart = () => { statusText.innerText = "🔊 正在播报..."; };
+            utterance.onend = () => { statusText.innerText = "按住继续说话"; };
+            utterance.onerror = (e) => { 
+                console.error("播报错误", e); 
+                statusText.innerText = "按住继续说话"; // 即使失败也恢复状态
+            };
+
+            window.speechSynthesis.speak(utterance);
+        }
+
+        async function sendAudioToServer(audioBlob) {
+            statusText.innerText = "⏳ 算力矩阵处理中...";
+            
+            const formData = new FormData();
+            formData.append("audio_file", audioBlob, "recording.webm");
+            formData.append("native_lang", "zh-cn");
+            formData.append("last_foreign_lang", currentForeignLang);
+
+            const t_frontend_start = Date.now();
+
+            try {
+                const response = await fetch("/api/voice", { method: "POST", body: formData });
+                const t_frontend_end = Date.now();
+                const total_frontend_time = t_frontend_end - t_frontend_start;
+
+                if (response.ok) {
+                    // 🎯 解析返回的纯 JSON 数据
+                    const data = await response.json();
+                    const networkTime = total_frontend_time - data.metrics.gateway_ms;
+
+                    // 动态更新语种
+                    const newForeignLang = data.detected_foreign_lang;
+                    if (newForeignLang && newForeignLang !== currentForeignLang && newForeignLang !== "zh-cn") {
+                        currentForeignLang = newForeignLang;
+                        langDisplay.innerText = `环境语种: 自动检测 (${currentForeignLang})`;
                     }
 
-                    const blob = await res.blob();
-                    player.src = URL.createObjectURL(blob);
-                    status.innerText = "播放中...";
-                    player.onended = () => status.innerText = "准备就绪";
-                } catch (err) {
-                    status.innerText = "翻译失败，请重试";
+                    // 更新硬核探针仪表盘，TTS 耗时固定为 0ms
+                    dashboard.innerHTML = 
+                        `🚀 总响应: <span class="metric">${total_frontend_time}ms</span><br>` +
+                        `🌐 Cloudflare: <span class="metric">${networkTime}ms</span> | 🗼 内网路由: <span class="metric">${data.metrics.gateway_ms}ms</span><br>` +
+                        `👂 听觉(Whisper): <span class="metric">${data.metrics.asr_ms}ms</span><br>` +
+                        `🧠 大脑(Qwen3): <span class="metric">${data.metrics.llm_ms}ms</span><br>` +
+                        `👄 发声(Client): <span class="metric">0ms (边缘计算)</span>`;
+
+                    // 唤醒本地发音
+                    speakText(data.text, data.target_tts_lang);
+
+                } else {
+                    statusText.innerText = "❌ 翻译失败，请重试";
                 }
-            };
-        });
+            } catch (error) {
+                console.error(error);
+                statusText.innerText = "❌ 网络连接异常";
+            }
+        }
+
+        const startRecording = (e) => {
+            e.preventDefault();
+            if (!mediaRecorder) return;
+            recordBtn.classList.add('recording');
+            recordBtn.innerText = "松开发送";
+            statusText.innerText = "🎙️ 正在录音...";
+            audioChunks = [];
+            mediaRecorder.start();
+        };
+
+        const stopRecording = (e) => {
+            e.preventDefault();
+            if (!mediaRecorder || mediaRecorder.state === "inactive") return;
+            recordBtn.classList.remove('recording');
+            recordBtn.innerText = "按住说话";
+            mediaRecorder.stop();
+        };
+
+        recordBtn.addEventListener('touchstart', startRecording, {passive: false});
+        recordBtn.addEventListener('touchend', stopRecording);
+        recordBtn.addEventListener('mousedown', startRecording);
+        recordBtn.addEventListener('mouseup', stopRecording);
+        recordBtn.addEventListener('mouseleave', stopRecording);
+
+        window.onload = initAudio;
     </script>
 </body>
 </html>
