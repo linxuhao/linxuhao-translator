@@ -26,6 +26,8 @@ services:
           memory: 512M
     ports:
       - "5000:5000"
+    volumes:
+      - ./gateway:/app
     restart: unless-stopped
 
   # ==========================================
