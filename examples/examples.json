@@ -1,0 +1,34 @@
+
+
+curl http://localhost:8001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3vl",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "请提取这张图片中的所有文字，并简短告诉我场景，绝对不允许解释、不允许任何客套话。如果图中没有文字，输出'无文字'"},
+          {"type": "image_url", "image_url": {"url": "https://lh3.googleusercontent.com/gps-cs-s/AHVAwermiwz3KtRYZqUwkLJ6662B6NQQL_syAr2NKf8MEooWUJIV4a1z9PSNIOcGZsv4Ok5Y5Ulwn5AiHixWlGWuvsZSnG1CHAuSTfofAQQqGiOyCOtZXpP5kLzpMFHVjV9cPYS5nGJwCQaxGHDy=s680-w680-h510-rw"}}
+        ]
+      }
+    ],
+    "max_tokens": 1024,
+    "temperature": 0.1
+  }'
+
+  
+
+curl -X POST -F "audio_file=@/home/linxuhao/Downloads/audioExample.m4a" http://localhost:9000/asr
+
+# 测试中文纯正发音 (生成结果极速落地为 test_zh.wav)
+curl -X POST http://localhost:9001/tts \
+     -H "Content-Type: application/json" \
+     -d '{"text":"您好，我已经准备好为您提供同声传译服务。","language":"zh-cn"}' \
+     -o test_zh.wav
+
+# 测试法语纯正发音 (生成结果极速落地为 test_fr.wav)
+curl -X POST http://localhost:9001/tts \
+     -H "Content-Type: application/json" \
+     -d '{"text":"Bonjour, je suis prêt à vous fournir un service d\'interprétation simultanée.","language":"fr"}' \
+     -o test_fr.wav

@@ -1,0 +1,142 @@
+services:
+  # ==========================================
+  # [网络层] Cloudflare 穿透隧道 (全球极速访问)
+  # ==========================================
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflare_tunnel
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      # ⚠️ 稍后需要在终端获取并填入你的专有 TUNNEL_TOKEN
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
+
+  # ----------------------------------------
+  # 调度中枢: API Gateway & PWA
+  # ----------------------------------------
+  gateway:
+    build:
+      context: ./gateway
+    container_name: api_gateway
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  # ==========================================
+  # GPU 0 (7900 XTX): vLLM 推理引擎 (2026 SOTA 架构)
+  # ==========================================
+  vllm-qwen:
+    image: vllm/vllm-openai-rocm:latest
+    container_name: vllm_qwen
+    ports:
+      - "8000:8000"
+    ipc: host
+    devices:
+      - "/dev/kfd:/dev/kfd"
+      - "/dev/dri:/dev/dri"
+    group_add:
+      - video
+      - render
+    environment:
+      - HIP_VISIBLE_DEVICES=0
+      - VLLM_USE_TRITON_AWQ=1
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    entrypoint: []
+    # 【关键修复 2】：手动指定 bash 执行环境
+    command: >
+      vllm serve ELVISIO/Qwen3-30B-A3B-Instruct-2507-AWQ     
+      --quantization awq
+      --dtype float16
+      --max-model-len 32768
+      --gpu-memory-utilization 0.95
+      --max-num-seqs 32
+      --enable-auto-tool-choice 
+      --tool-call-parser qwen3_xml
+      --reasoning-parser qwen3
+      --served-model-name qwen3
+      --trust-remote-code
+    restart: unless-stopped
+
+  # ==========================================
+  # GPU 1 (7800 XT - 16GB): 视觉层 (图片 OCR 与语境)
+  # 占用端口: 8001 | 预期显存: 封顶 6.4GB (40%)
+  # ==========================================
+  vllm-vision:
+    image: vllm/vllm-openai-rocm:latest
+    container_name: vllm_vision
+    ports:
+      - "8001:8000" # 映射到宿主机的 8001，避免与 Brain 冲突
+    ipc: host
+    devices:
+      - "/dev/kfd:/dev/kfd"
+      - "/dev/dri:/dev/dri"
+    group_add:
+      - video
+      - render
+    environment:
+      - HIP_VISIBLE_DEVICES=1
+      - VLLM_USE_TRITON_AWQ=1
+      - PYTORCH_ALLOC_CONF=expandable_segments:True
+      - VLLM_SKIP_WARMUP=true
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    entrypoint: []
+    # 【关键修复 2】：手动指定 bash 执行环境
+    # 【核心防御】：必须用量化版，并且死锁显存上限
+    command: >
+      vllm serve cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit
+      --dtype float16
+      --max-model-len 4096
+      --gpu-memory-utilization 0.5
+      --mm-processor-kwargs '{"max_pixels": 1048576, "min_pixels": 129600}'
+      --limit-mm-per-prompt '{"image": 1}'
+      --max-num-seqs 2
+      --enforce-eager
+      --served-model-name qwen3vl
+    restart: unless-stopped
+
+ # ==========================================
+# 文件名: docker-compose.audio.yml
+# 架构定位: GPU 1 (7800 XT) - 纯正 ROCm 原生听觉与发声节点
+# ==========================================
+  whisper-rocm:
+    build:
+      context: ./whisper-rocm
+    container_name: whisper_rocm
+    ports:
+      - "9000:8000"
+    devices:
+      - "/dev/kfd:/dev/kfd"
+      - "/dev/dri:/dev/dri"
+    environment:
+      - HIP_VISIBLE_DEVICES=1 # 物理隔离至 7800 XT
+      - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+    volumes:
+      - ./whisper-rocm:/app
+      - ~/.cache/huggingface:/root/.cache/huggingface # 缓存模型，避免重复下载
+    restart: unless-stopped
+
+# ==========================================
+# 文件名: docker-compose.audio.yml (摘录发声节点部分)
+# ==========================================
+  kokoro-rocm:
+    build:
+      context: ./kokoro-rocm
+    container_name: kokoro_rocm
+    ports:
+      - "9001:8000" # 映射宿主机 9001 端口给发声网关
+    devices:
+      - "/dev/kfd:/dev/kfd"
+      - "/dev/dri:/dev/dri"
+    environment:
+      - HIP_VISIBLE_DEVICES=1 # 物理隔离至 7800 XT
+      # 开启 Flash Attention 硬件加速
+      - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+    volumes:
+      - ./kokoro-rocm:/app
+      # 缓存 Kokoro 的超轻量权重文件
+      - ~/.cache/huggingface:/root/.cache/huggingface 
+    restart: unless-stopped
