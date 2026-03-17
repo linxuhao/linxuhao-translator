@@ -104,30 +104,40 @@ async def process_voice(
             return Response(status_code=400, content=json.dumps({"error": "未能识别有效语音"}), media_type="application/json")
 
         # ----------------------------------
-        # 2. 路由层 - Python 绝对物理接管
+        # 2. 路由层 - 严格正向匹配
         # ----------------------------------
         if input_lang == "unknown" or input_lang == "":
             input_lang = native_lang_base
 
-        if input_lang.startswith(native_lang_base):
+        # 🎯 物理防线：废除方言宽容度。只有完全等于母语短码 (zh)，才算母语。
+        # 只要是 yue (粤语)、wuu (吴语) 或者 en (英语)，统统视为外语！
+        is_native = (input_lang == native_lang_base)
+
+        if is_native:
+            # 听到的是标准母语 -> 翻译为外语 (中翻外)
             target_tts_lang = last_foreign_lang
             detected_foreign_lang = last_foreign_lang
         else:
+            # 听到的是方言或外语 -> 翻译为标准母语 (方翻中 / 外翻中)
             target_tts_lang = native_lang_base
             detected_foreign_lang = input_lang
 
         # ----------------------------------
-        # 3. 大脑层 (Brain) - 注入绝对的语义权重
+        # 3. 大脑层 (Brain) - 维持强效 Prompt 压制
         # ----------------------------------
         from transformers.models.whisper.tokenization_whisper import LANGUAGES
         t_brain_start = time.time()
         
         target_lang_full_name = LANGUAGES.get(target_tts_lang, target_tts_lang).title()
-        instruction = f"将以下句子直接翻译为{target_lang_full_name}。"
+        
+        # 保持对 LLM 的严格身份锚定，防止它在“中翻中”时飙英文
+        if target_tts_lang == "zh":
+            target_lang_full_name = "简体中文"
+        instruction = f"将user的句子直接翻译为{target_lang_full_name}。"
         # Prompt 换装：用完整的人类语言名称发号施令
         system_prompt = f"""{instruction}
         必须严格返回JSON格式，禁止输出其他任何字符,:
-        {{"text": "纯净的翻译结果"}}"""
+        {{"text": ""}}"""
 
         brain_payload = {
             "model": "qwen3",

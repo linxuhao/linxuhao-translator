@@ -3,6 +3,7 @@
 # 架构定位: Qwen3-ASR 官方包实现，附带短码物理转换器
 # ==========================================
 import uvicorn
+import logging
 from fastapi import FastAPI, UploadFile, File
 import subprocess
 import numpy as np
@@ -12,9 +13,12 @@ from qwen_asr import Qwen3ASRModel
 # 🎯 核心变更：直接白嫖 transformers 内部的标准语种字典
 from transformers.models.whisper.tokenization_whisper import TO_LANGUAGE_CODE
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger("qwen3-asr")
+
 app = FastAPI()
 
-print("🚀 Loading Qwen3-ASR-1.7B on ROCm via official qwen-asr package...")
+logger.info("🚀 Loading Qwen3-ASR-1.7B on ROCm via official qwen-asr package...")
 
 # 🎯 使用官方封装类，完美规避架构不识别的问题。使用 float16 适配 ROCm。
 model = Qwen3ASRModel.from_pretrained(
@@ -25,7 +29,7 @@ model = Qwen3ASRModel.from_pretrained(
     max_new_tokens=256
 )
 
-print("✅ Qwen3-ASR 官方工业引擎就绪。")
+logger.info("✅ Qwen3-ASR 官方工业引擎就绪。")
 
 def decode_audio(audio_bytes: bytes) -> np.ndarray:
     process = subprocess.Popen(
@@ -51,7 +55,7 @@ async def transcribe(audio_file: UploadFile = File(...)):
 
     try:
         results = model.transcribe(audio=(y, 16000), language=None)
-        
+        #logger.info(f"✅ asr results: {results}")
         res = results[0]
         # Qwen 吐出的是首字母大写的英文全称 (如 "Chinese", "Spanish")，必须转小写
         raw_language = (res.language or "unknown").lower()
@@ -66,7 +70,7 @@ async def transcribe(audio_file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        print(f"推理异常: {e}")
+        logger.info(f"推理异常: {e}")
         return {"text": "", "language": "unknown", "error": "引擎推理失败"}
 
 if __name__ == "__main__":
