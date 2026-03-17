@@ -136,8 +136,9 @@ async def process_voice(
         instruction = f"将user的句子直接翻译为{target_lang_full_name}。"
         # Prompt 换装：用完整的人类语言名称发号施令
         system_prompt = f"""{instruction}
-        必须严格返回JSON格式，禁止输出其他任何字符,:
-        {{"text": ""}}"""
+如果翻译是中文对中文，那么按照输入可能是方言来翻译。
+必须严格返回JSON格式，禁止输出其他任何字符,:
+{{"text": ""}}"""
 
         brain_payload = {
             "model": "qwen3",
