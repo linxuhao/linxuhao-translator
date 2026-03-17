@@ -107,10 +107,10 @@ services:
 # 文件名: docker-compose.audio.yml
 # 架构定位: GPU 1 (7800 XT) - 纯正 ROCm 原生听觉与发声节点
 # ==========================================
-  whisper-rocm:
+  qwen3-asr:
     build:
-      context: ./whisper-rocm
-    container_name: whisper_rocm
+      context: ./qwen3-asr
+    container_name: qwen3_asr
     ports:
       - "9000:8000"
     devices:
@@ -120,6 +120,6 @@ services:
       - HIP_VISIBLE_DEVICES=1 # 物理隔离至 7800 XT
       - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
     volumes:
-      - ./whisper-rocm:/app
+      - ./qwen3-asr:/app
       - ~/.cache/huggingface:/root/.cache/huggingface # 缓存模型，避免重复下载
     restart: unless-stopped

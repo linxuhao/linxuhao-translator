@@ -1,6 +1,6 @@
 # ==========================================
 # 文件名: gateway/gateway.py
-# 任务目标: 剥离 TTS，保留全链路毫秒级追踪日志，返回纯 JSON
+# 架构定位: 单核极速路由 (配合 Qwen3-ASR 多模态听觉引擎，废除双级调用)
 # ==========================================
 import json
 import logging
@@ -9,19 +9,17 @@ from fastapi import FastAPI, UploadFile, File, Form, Response
 from fastapi.responses import HTMLResponse
 import httpx
 
-# 配置日志输出格式
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    datefmt="%H:%M:%S"
-)
+# 🎯 核心变更：同时引入正向（全称转短码）和反向（短码转全称）字典
+from transformers.models.whisper.tokenization_whisper import TO_LANGUAGE_CODE, LANGUAGES
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("gateway")
 
 app = FastAPI()
 
 BRAIN_URL = "http://vllm_qwen:8000/v1/chat/completions"
-ASR_URL = "http://whisper_rocm:8000/asr"
-# 🎯 移除了 TTS_URL
+# 🎯 物理变更：指向全新的 Qwen3-ASR 容器 (匹配 docker-compose 的 container_name)
+ASR_URL = "http://qwen3_asr:8000/asr"
 
 @app.get("/")
 async def serve_frontend():
@@ -31,43 +29,63 @@ async def serve_frontend():
 @app.post("/api/voice")
 async def process_voice(
     audio_file: UploadFile = File(...),
-    native_lang: str = Form("zh-cn"),
+    native_lang: str = Form("zh"), 
     last_foreign_lang: str = Form("fr")
 ):
     req_id = f"REQ-{int(time.time()*1000)}"
-    logger.info(f"========== [{req_id}] 新请求切入 ==========")
-    logger.info(f"[{req_id}] 状态: 母语={native_lang}, 预期外语={last_foreign_lang}")
-    
     t_start = time.time()
+    
+    native_lang_base = native_lang.split('-')[0].lower()
+    
     async with httpx.AsyncClient(timeout=60.0) as client:
         # ----------------------------------
-        # 1. 听觉层 (ASR)
+        # 1. 听觉层 (ASR) - Qwen3-ASR-1.7B (直接吐出纯净文本 + 绝对语种短码)
         # ----------------------------------
         t_asr_start = time.time()
         files = {'audio_file': (audio_file.filename, await audio_file.read(), audio_file.content_type)}
         asr_resp = await client.post(ASR_URL, files=files)
-        asr_text = asr_resp.json().get("text", "")
         t_asr_end = time.time()
         
-        logger.info(f"[{req_id}] 👂 ASR 耗时: {int((t_asr_end - t_asr_start)*1000)}ms | 识别文本: '{asr_text}'")
+        if asr_resp.status_code != 200:
+            logger.error(f"[{req_id}] ❌ 听觉引擎宕机! 状态码: {asr_resp.status_code}")
+            return Response(status_code=500, content=json.dumps({"error": "听觉引擎崩溃"}), media_type="application/json")
+            
+        asr_data = asr_resp.json()
+        asr_text = asr_data.get("text", "").strip()
+        input_lang = asr_data.get("language", "unknown").lower()
+        
+        logger.info(f"[{req_id}] 👂 ASR 耗时: {int((t_asr_end - t_asr_start)*1000)}ms | 物理鉴定语种: {input_lang} | 文本: '{asr_text}'")
 
-        if not asr_text.strip():
-            logger.warning(f"[{req_id}] ⚠️ 未识别到有效语音，请求终止。")
-            return Response(status_code=400, content="未能识别有效语音")
+        # 物理防线：极强抗幻觉兜底
+        if not asr_text or len(asr_text) < 1:
+            return Response(status_code=400, content=json.dumps({"error": "未能识别有效语音"}), media_type="application/json")
 
         # ----------------------------------
-        # 2. 大脑层 (Brain)
+        # 2. 路由层 - Python 绝对物理接管
+        # ----------------------------------
+        if input_lang == "unknown" or input_lang == "":
+            input_lang = native_lang_base
+
+        if input_lang.startswith(native_lang_base):
+            target_tts_lang = last_foreign_lang
+            detected_foreign_lang = last_foreign_lang
+        else:
+            target_tts_lang = native_lang_base
+            detected_foreign_lang = input_lang
+
+        # ----------------------------------
+        # 3. 大脑层 (Brain) - 注入绝对的语义权重
         # ----------------------------------
         t_brain_start = time.time()
-        system_prompt = f"""你是一个核心翻译路由器。
-        【当前参数】母语: {native_lang} | 环境外语: {last_foreign_lang}
         
-        【严格处理规则】
-        1. 语种鉴定：分析用户的输入。
-        2. 若输入是母语 ({native_lang})：翻译成环境外语。detected_foreign_lang 必须原样输出 "{last_foreign_lang}"，绝不可瞎编。
-        3. 若输入是某种外语：翻译成母语 ({native_lang})。将 detected_foreign_lang 更新为你识别出的这门外语的简码 (如 fr, es, en)。
-        
-        必须只返回严格的JSON: {{"target_tts_lang": "最终要发音的语种代码", "text": "纯净翻译文本", "detected_foreign_lang": "按照规则得出的环境外语"}}"""
+        # 🎯 物理转换：将 "zh" 转为 "Chinese", 将 "ja" 转为 "Japanese"
+        # .title() 确保首字母大写，最大化触发 LLM 的权重神经元
+        target_lang_full_name = LANGUAGES.get(target_tts_lang, target_tts_lang).title()
+        instruction = f"将以下句子直接翻译为{target_lang_full_name}。"
+        # Prompt 换装：用完整的人类语言名称发号施令
+        system_prompt = f"""{instruction}
+        必须严格返回JSON格式，禁止输出其他任何字符,:
+        {{"text": "纯净的翻译结果"}}"""
 
         brain_payload = {
             "model": "qwen3",
@@ -76,39 +94,32 @@ async def process_voice(
                 {"role": "user", "content": asr_text}
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.1,
-            "tool_choice": "none"
+            "temperature": 0.0, # 彻底剥离创造力
+            "tool_choice": "none",
+            "max_tokens": 256
         }
-        
-        logger.info(f"[{req_id}] 🧠 LLM Payload 发送: {json.dumps(brain_payload, ensure_ascii=False)}")
-        
-        brain_resp = await client.post(BRAIN_URL, json=brain_payload)
-        resp_json = brain_resp.json()
-        
+
+        resp_brain = await client.post(BRAIN_URL, json=brain_payload)
+
         try:
-            message = resp_json["choices"][0]["message"]
-            raw_content = message.get("content") or message.get("reasoning")
-            clean_content = raw_content.replace("```json", "").replace("```", "").strip()
-            trans_data = json.loads(clean_content)
+            content = resp_brain.json()["choices"][0]["message"]["content"]
+            trans_text = json.loads(content.replace("```json", "").replace("```", "").strip()).get("text", "")
         except Exception as e:
-            logger.error(f"[{req_id}] ❌ LLM 解析失败: {str(e)} | 原始响应: {json.dumps(resp_json, ensure_ascii=False)}")
-            return Response(status_code=500, content="大脑解析异常")
+            logger.error(f"[{req_id}] ❌ 翻译生成异常: {e}")
+            return Response(status_code=500, content=json.dumps({"error": "翻译生成异常"}), media_type="application/json")
             
         t_brain_end = time.time()
-        logger.info(f"[{req_id}] 🧠 LLM 耗时: {int((t_brain_end - t_brain_start)*1000)}ms | 解析结果: {json.dumps(trans_data, ensure_ascii=False)}")
+        
+        logger.info(f"[{req_id}] 🧠 LLM 翻译耗时: {int((t_brain_end-t_brain_start)*1000)}ms | 目标发音: {target_lang_full_name} | 结果: '{trans_text}'")
 
         # ----------------------------------
-        # 3. 收尾组装 (剥离后端发声)
+        # 4. 组装响应
         # ----------------------------------
         t_end = time.time()
-        logger.info(f"[{req_id}] 🗼 网关内部总耗时: {int((t_end - t_start)*1000)}ms")
-        logger.info(f"========== [{req_id}] 请求结束 ==========\n")
-
-        # 🎯 直接将所有探针数据打包在 JSON 中给前端
         response_data = {
-            "text": trans_data["text"],
-            "target_tts_lang": trans_data["target_tts_lang"],
-            "detected_foreign_lang": trans_data["detected_foreign_lang"],
+            "text": trans_text,
+            "target_tts_lang": target_tts_lang,
+            "detected_foreign_lang": detected_foreign_lang,
             "metrics": {
                 "asr_ms": int((t_asr_end - t_asr_start) * 1000),
                 "llm_ms": int((t_brain_end - t_brain_start) * 1000),
