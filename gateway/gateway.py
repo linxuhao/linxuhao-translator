@@ -7,7 +7,9 @@ import logging
 import time
 from fastapi import FastAPI, UploadFile, File, Form, Response
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 import httpx
+
 
 # 🎯 核心变更：同时引入正向（全称转短码）和反向（短码转全称）字典
 from transformers.models.whisper.tokenization_whisper import TO_LANGUAGE_CODE, LANGUAGES
@@ -16,6 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 logger = logging.getLogger("gateway")
 
 app = FastAPI()
+app.mount("/resources", StaticFiles(directory="resources"), name="resources")
 
 BRAIN_URL = "http://vllm_qwen:8000/v1/chat/completions"
 # 🎯 物理变更：指向全新的 Qwen3-ASR 容器 (匹配 docker-compose 的 container_name)

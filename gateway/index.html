@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#007aff">
+    <link rel="apple-touch-icon" href="/resources/icon.png" crossorigin="use-credentials">
+    <link rel="manifest" href="/resources/manifest.json" crossorigin="use-credentials">
     <title>随身翻译官</title>
     <style>
         * { box-sizing: border-box; touch-action: manipulation; }
@@ -78,8 +81,12 @@
                 };
 
                 mediaRecorder.onstop = async () => {
+                    // 💥 关键：必须遍历所有轨道并停止，否则 iOS 会锁死在“通话模式”（听筒音量）
+                    currentStream.getTracks().forEach(track => {
+                        track.stop();
+                        track.enabled = false;
+                    });
                     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                    audioChunks = [];
                     await sendAudioToServer(audioBlob);
                 };
             } catch (err) {
