@@ -81,12 +81,8 @@
                 };
 
                 mediaRecorder.onstop = async () => {
-                    // 💥 关键：必须遍历所有轨道并停止，否则 iOS 会锁死在“通话模式”（听筒音量）
-                    currentStream.getTracks().forEach(track => {
-                        track.stop();
-                        track.enabled = false;
-                    });
                     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    audioChunks = [];
                     await sendAudioToServer(audioBlob);
                 };
             } catch (err) {
