@@ -17,19 +17,33 @@
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             height: 100vh; background-color: #f5f5f7; color: #333;
         }
-        .header { position: absolute; top: 5%; text-align: center; }
+        .header { position: absolute; top: 5%; text-align: center; width: 100%; }
         h1 { margin: 0; font-size: 28px; color: #1d1d1f; }
         .lang-indicator {
             margin-top: 8px; font-size: 16px; color: #86868b;
             background: #e8e8ed; padding: 4px 12px; border-radius: 12px;
+            display: inline-block;
         }
+        
+        /* 新增控制面板样式 */
+        .controls-panel {
+            margin-top: 15px; display: flex; flex-direction: column; align-items: center; gap: 10px;
+        }
+        .lang-select {
+            padding: 8px 12px; border-radius: 8px; border: 1px solid #d2d2d7; 
+            font-size: 14px; background: #fff; outline: none;
+        }
+        .debug-toggle {
+            font-size: 14px; color: #86868b; display: flex; align-items: center; gap: 5px;
+        }
+
         .record-btn {
             width: 220px; height: 220px; border-radius: 50%;
             background: linear-gradient(135deg, #007aff, #005bb5);
             color: white; font-size: 28px; font-weight: bold;
             border: none; box-shadow: 0 10px 30px rgba(0, 122, 255, 0.4);
             transition: all 0.2s ease; display: flex; align-items: center; justify-content: center;
-            user-select: none; -webkit-user-select: none;
+            user-select: none; -webkit-user-select: none; margin-top: 20px;
         }
         .record-btn:active, .record-btn.recording {
             transform: scale(0.95); background: linear-gradient(135deg, #ff3b30, #c92a20);
@@ -42,24 +56,64 @@
         .play-btn {
             padding: 8px 24px; font-size: 16px; color: #fff; background-color: #34c759;
             border: none; border-radius: 20px; box-shadow: 0 4px 10px rgba(52, 199, 89, 0.3);
-            display: none; /* 默认隐藏 */
+            display: none;
         }
         .play-btn:active { transform: scale(0.95); background-color: #2eb050; }
+        
         #latency-dashboard {
-            position: absolute; bottom: 5%; width: 90%;
+            position: absolute; bottom: 5%; width: 90%; max-height: 25vh; overflow-y: auto;
             background: #fff; padding: 15px; border-radius: 16px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            font-size: 13px; color: #666; font-family: monospace; line-height: 1.6;
-            text-align: center;
+            font-size: 12px; color: #666; font-family: monospace; line-height: 1.6;
+            text-align: left; display: none; /* 默认隐藏，由 Debug 控制 */
         }
         .metric { font-weight: bold; color: #1d1d1f; }
+        .log-entry { border-top: 1px dashed #eee; margin-top: 5px; padding-top: 5px; color: #888; }
     </style>
 </head>
 <body>
 
     <div class="header">
         <h1>🗣️ 随身翻译官</h1>
-        <div class="lang-indicator" id="lang-display">环境语种: 法语 (fr)</div>
+        <div class="lang-indicator" id="lang-display">环境语种: 待检测</div>
+        
+        <div class="controls-panel">
+            <select class="lang-select" id="nativeLang">
+                <option value="zh">中文 (zh)</option>
+                <option value="en">English (en)</option>
+                <option value="yue">粤语 (yue)</option>
+                <option value="ar">العربية (ar)</option>
+                <option value="de">Deutsch (de)</option>
+                <option value="fr">Français (fr)</option>
+                <option value="es">Español (es)</option>
+                <option value="pt">Português (pt)</option>
+                <option value="id">Bahasa Indonesia (id)</option>
+                <option value="it">Italiano (it)</option>
+                <option value="ko">한국어 (ko)</option>
+                <option value="ru">Русский (ru)</option>
+                <option value="th">ไทย (th)</option>
+                <option value="vi">Tiếng Việt (vi)</option>
+                <option value="ja">日本語 (ja)</option>
+                <option value="tr">Türkçe (tr)</option>
+                <option value="hi">हिन्दी (hi)</option>
+                <option value="ms">Bahasa Melayu (ms)</option>
+                <option value="nl">Nederlands (nl)</option>
+                <option value="sv">Svenska (sv)</option>
+                <option value="da">Dansk (da)</option>
+                <option value="fi">Suomi (fi)</option>
+                <option value="pl">Polski (pl)</option>
+                <option value="cs">Čeština (cs)</option>
+                <option value="fil">Filipino (fil)</option>
+                <option value="fa">فارسی (fa)</option>
+                <option value="el">Ελληνικά (el)</option>
+                <option value="hu">Magyar (hu)</option>
+                <option value="mk">Македонски (mk)</option>
+                <option value="ro">Română (ro)</option>
+            </select>
+            <label class="debug-toggle">
+                <input type="checkbox" id="debugCheckbox"> 开启 Debug 模式
+            </label>
+        </div>
     </div>
 
     <button class="record-btn" id="recordBtn">按住说话</button>
@@ -78,8 +132,6 @@
         let mediaRecorder;
         let audioChunks = [];
         let currentForeignLang = "fr"; 
-        
-        // --- 缓存最后一次 TTS 结果变量 ---
         let latestTtsText = "";
         let latestTtsLang = "";
 
@@ -88,66 +140,55 @@
         const playBtn = document.getElementById('playBtn');
         const dashboard = document.getElementById('latency-dashboard');
         const langDisplay = document.getElementById('lang-display');
+        const nativeLangSelect = document.getElementById('nativeLang');
+        const debugCheckbox = document.getElementById('debugCheckbox');
 
-        // --- 设备嗅探 ---
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-        // 预加载语音列表
+        // --- 初始化 Native Language ---
+        function initNativeLanguage() {
+            const sysLangCode = (navigator.language || navigator.userLanguage || "zh").split('-')[0].toLowerCase();
+            const options = Array.from(nativeLangSelect.options);
+            const match = options.find(opt => opt.value === sysLangCode);
+            nativeLangSelect.value = match ? sysLangCode : "zh";
+        }
+        initNativeLanguage();
+
+        // --- Debug 面板显示控制 ---
+        debugCheckbox.addEventListener('change', (e) => {
+            dashboard.style.display = e.target.checked ? 'block' : 'none';
+        });
+
         if ('speechSynthesis' in window) {
             speechSynthesis.getVoices();
         }
 
-        // --- 纯净版语音合成 ---
         function speakText(text, langCode) {
-            if (!('speechSynthesis' in window)) {
-                statusText.innerText = "❌ 浏览器不支持语音";
-                return;
-            }
-
-            const langMap = {
-                "zh": "zh-CN", "zh-cn": "zh-CN", 
-                "fr": "fr-FR", "en": "en-US", 
-                "es": "es-ES", "ja": "ja-JP", 
-                "ko": "ko-KR", "de": "de-DE", 
-                "ru": "ru-RU", "it": "it-IT",
-                "pt": "pt-BR"
-            };
+            if (!('speechSynthesis' in window)) return;
+            const langMap = { "zh": "zh-CN", "fr": "fr-FR", "en": "en-US", "es": "es-ES", "ja": "ja-JP", "ko": "ko-KR", "de": "de-DE", "ru": "ru-RU", "it": "it-IT", "pt": "pt-BR" };
             const systemLang = langMap[langCode] || langCode;
 
-            window.speechSynthesis.cancel(); // 清理残留
-
+            window.speechSynthesis.cancel();
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = systemLang;
             utterance.rate = 1.0;
 
             utterance.onstart = () => { statusText.innerText = "🔊 正在播报..."; };
             utterance.onend = () => { statusText.innerText = "按住继续说话"; };
-            utterance.onerror = (e) => { 
-                console.error("播报错误", e); 
-                statusText.innerText = "按住继续说话"; 
-            };
+            utterance.onerror = () => { statusText.innerText = "按住继续说话"; };
             
-            // 短暂延时防止 iOS cancel 吞并指令
             setTimeout(() => { window.speechSynthesis.speak(utterance); }, 50);
         }
 
-        // --- 绑定播放按钮事件 (用户主动点击触发，符合 WebKit 规范) ---
         playBtn.addEventListener('click', () => {
-            if (latestTtsText) {
-                speakText(latestTtsText, latestTtsLang);
-            }
+            if (latestTtsText) speakText(latestTtsText, latestTtsLang);
         });
 
-        // ---------- 录音初始化 ----------
         async function initAudio() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-                
-                mediaRecorder.ondataavailable = event => {
-                    if (event.data.size > 0) audioChunks.push(event.data);
-                };
-
+                mediaRecorder.ondataavailable = event => { if (event.data.size > 0) audioChunks.push(event.data); };
                 mediaRecorder.onstop = async () => {
                     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                     audioChunks = [];
@@ -159,14 +200,14 @@
             }
         }
 
-        // ---------- 发送录音到服务器 ----------
         async function sendAudioToServer(audioBlob) {
             statusText.innerText = "⏳ 算力矩阵处理中...";
             
             const formData = new FormData();
             formData.append("audio_file", audioBlob, "recording.webm");
-            formData.append("native_lang", "zh-cn");
+            formData.append("native_lang", nativeLangSelect.value); // 动态获取 Native Lang
             formData.append("last_foreign_lang", currentForeignLang);
+            formData.append("debug", debugCheckbox.checked); // 传递 debug 状态
 
             const t_frontend_start = Date.now();
 
@@ -179,30 +220,30 @@
                     const data = await response.json();
                     const networkTime = total_frontend_time - data.metrics.gateway_ms;
 
-                    // 动态更新语种
                     const newForeignLang = data.detected_foreign_lang;
-                    if (newForeignLang && newForeignLang !== currentForeignLang && newForeignLang !== "zh-cn") {
+                    if (newForeignLang && newForeignLang !== currentForeignLang && newForeignLang !== nativeLangSelect.value) {
                         currentForeignLang = newForeignLang;
                         langDisplay.innerText = `环境语种: 自动检测 (${currentForeignLang})`;
                     }
 
-                    // 更新监控面板
+                    // 构建指标与后端日志视图
+                    let logsHtml = "";
+                    if (data.logs && data.logs.length > 0) {
+                        logsHtml = `<div class="log-entry"><strong>Backend Logs:</strong><br>${data.logs.join('<br>')}</div>`;
+                    }
+
                     dashboard.innerHTML = 
                         `🚀 总响应: <span class="metric">${total_frontend_time}ms</span><br>` +
-                        `🌐 Cloudflare: <span class="metric">${networkTime}ms</span> | 🗼 内网路由: <span class="metric">${data.metrics.gateway_ms}ms</span><br>` +
+                        `🌐 网络传输: <span class="metric">${networkTime}ms</span> | 🗼 网关处理: <span class="metric">${data.metrics.gateway_ms}ms</span><br>` +
                         `👂 听觉(ASR): <span class="metric">${data.metrics.asr_ms}ms</span><br>` +
-                        `🧠 大脑(LLM): <span class="metric">${data.metrics.llm_ms}ms</span><br>` +
-                        `👄 发声(Client): <span class="metric">0ms (边缘计算)</span>`;
+                        `🧠 大脑(LLM): <span class="metric">${data.metrics.llm_ms}ms</span>` + logsHtml;
 
-                    // --- iOS 策略分流 ---
                     if (isIOS) {
-                        // 拦截自动播放，缓存变量，暴露播放按钮
                         latestTtsText = data.text;
                         latestTtsLang = data.target_tts_lang;
                         playBtn.style.display = 'inline-block';
                         statusText.innerText = "✅ 翻译完成";
                     } else {
-                        // 非 iOS 平台继续尝试自动播报
                         speakText(data.text, data.target_tts_lang);
                     }
 
@@ -215,17 +256,14 @@
             }
         }
 
-        // ---------- 录音控制 ----------
         const startRecording = (e) => {
             e.preventDefault();
             if (!mediaRecorder) return;
-            
             recordBtn.classList.add('recording');
             recordBtn.innerText = "松开发送";
             statusText.innerText = "🎙️ 正在录音...";
-            playBtn.style.display = 'none'; // 录音时隐藏播放按钮
+            playBtn.style.display = 'none';
             audioChunks = [];
-            
             mediaRecorder.start();
         };
 
@@ -237,14 +275,12 @@
             mediaRecorder.stop();
         };
 
-        // 绑定事件
         recordBtn.addEventListener('touchstart', startRecording, { passive: false });
         recordBtn.addEventListener('touchend', stopRecording);
         recordBtn.addEventListener('mousedown', startRecording);
         recordBtn.addEventListener('mouseup', stopRecording);
         recordBtn.addEventListener('mouseleave', stopRecording);
 
-        // 页面加载初始化
         window.onload = initAudio;
     </script>
 </body>
