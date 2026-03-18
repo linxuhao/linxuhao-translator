@@ -1,6 +1,6 @@
 # ==========================================
 # 文件名: qwen3-asr/app.py
-# 架构定位: Qwen3-ASR 官方包实现，附带短码物理转换器
+# 架构定位: Transformers 原生推理 (每个 Worker 独立加载单并发极速模型)
 # ==========================================
 import uvicorn
 import logging
@@ -9,27 +9,25 @@ import subprocess
 import numpy as np
 import torch
 from qwen_asr import Qwen3ASRModel
-
-# 🎯 核心变更：直接白嫖 transformers 内部的标准语种字典
 from transformers.models.whisper.tokenization_whisper import TO_LANGUAGE_CODE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s", datefmt="%H:%M:%S")
-logger = logging.getLogger("qwen3-asr")
+logger = logging.getLogger("qwen3-asr-worker")
 
 app = FastAPI()
 
-logger.info("🚀 Loading Qwen3-ASR-1.7B on ROCm via official qwen-asr package...")
+logger.info("🚀 Booting ASR Worker on GPU 0 (7800 XT)...")
 
-# 🎯 使用官方封装类，完美规避架构不识别的问题。使用 float16 适配 ROCm。
+# 物理隔离：完全放弃 vLLM，使用最稳妥的原生加载
 model = Qwen3ASRModel.from_pretrained(
     "Qwen/Qwen3-ASR-1.7B",
     dtype=torch.float16,
-    device_map="cuda:0",
-    max_inference_batch_size=1,
+    device_map="cuda:0", 
+    max_inference_batch_size=1, # 单进程单处理，极致低延迟
     max_new_tokens=256
 )
 
-logger.info("✅ Qwen3-ASR 官方工业引擎就绪。")
+logger.info("✅ ASR Worker Ready.")
 
 def decode_audio(audio_bytes: bytes) -> np.ndarray:
     process = subprocess.Popen(
@@ -55,13 +53,10 @@ async def transcribe(audio_file: UploadFile = File(...)):
 
     try:
         results = model.transcribe(audio=(y, 16000), language=None)
-        #logger.info(f"✅ asr results: {results}")
         res = results[0]
-        # Qwen 吐出的是首字母大写的英文全称 (如 "Chinese", "Spanish")，必须转小写
         raw_language = (res.language or "unknown").lower()
         text = res.text.strip()
         
-        # 🎯 查表：将 "chinese" 完美映射为 "zh"，支持全球 99 种语言
         iso_lang = TO_LANGUAGE_CODE.get(raw_language, "unknown")
         
         return {
@@ -70,7 +65,7 @@ async def transcribe(audio_file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        logger.info(f"推理异常: {e}")
+        logger.error(f"推理异常: {e}")
         return {"text": "", "language": "unknown", "error": "引擎推理失败"}
 
 if __name__ == "__main__":
