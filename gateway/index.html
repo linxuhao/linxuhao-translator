@@ -184,19 +184,50 @@
             if (latestTtsText) speakText(latestTtsText, latestTtsLang);
         });
 
+// ---------- 录音初始化 ----------
         async function initAudio() {
             try {
+                // 1. 前置安全上下文与 API 检测
+                if (!window.isSecureContext) {
+                    throw new Error("iOS 限制: 必须使用 HTTPS 或 Localhost");
+                }
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error("浏览器不支持录音 API (navigator.mediaDevices 缺失)");
+                }
+                if (typeof MediaRecorder === 'undefined') {
+                    throw new Error("当前 iOS 版本过低，不支持 MediaRecorder");
+                }
+
+                // 2. 请求麦克风权限
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-                mediaRecorder.ondataavailable = event => { if (event.data.size > 0) audioChunks.push(event.data); };
+                
+                // 3. 兼容老版本 Safari 的 MIME Type
+                let options = { mimeType: 'audio/webm' };
+                if (!MediaRecorder.isTypeSupported('audio/webm')) {
+                    options = { mimeType: 'audio/mp4' }; // 老版 iOS 备用格式
+                }
+                
+                mediaRecorder = new MediaRecorder(stream, options);
+                
+                mediaRecorder.ondataavailable = event => {
+                    if (event.data.size > 0) audioChunks.push(event.data);
+                };
+
                 mediaRecorder.onstop = async () => {
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
                     audioChunks = [];
                     await sendAudioToServer(audioBlob);
                 };
             } catch (err) {
-                statusText.innerText = "⚠️ 请允许麦克风权限";
+                console.error("Mic initialization failed:", err);
+                // 捕获系统级报错并展示
+                const errorMsg = err.name === 'NotAllowedError' ? "麦克风被拒或被系统占用" 
+                               : err.name === 'NotFoundError' ? "未检测到麦克风硬件" 
+                               : err.message || err.name || "未知麦克风错误";
+                               
+                statusText.innerText = `⚠️ 录音失败: ${errorMsg}`;
                 statusText.style.color = "red";
+                statusText.style.fontSize = "16px"; // 缩小字号防溢出
             }
         }
 
@@ -221,10 +252,14 @@
                     const networkTime = total_frontend_time - data.metrics.gateway_ms;
 
                     const newForeignLang = data.detected_foreign_lang;
-                    if (newForeignLang && newForeignLang !== currentForeignLang && newForeignLang !== nativeLangSelect.value) {
+                    
+                    // 只要后端返回了有效的外语（非当前设定的母语），就更新外语状态变量
+                    if (newForeignLang && newForeignLang !== nativeLangSelect.value) {
                         currentForeignLang = newForeignLang;
-                        langDisplay.innerText = `环境语种: 自动检测 (${currentForeignLang})`;
                     }
+                    
+                    // 物理层面：剥离 if 阻断，强制每次请求成功后刷新 UI 消除“待检测”字样
+                    langDisplay.innerText = `环境语种: 自动检测 (${currentForeignLang})`;
 
                     // 构建指标与后端日志视图
                     let logsHtml = "";
