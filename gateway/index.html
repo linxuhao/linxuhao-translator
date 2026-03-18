@@ -35,7 +35,16 @@
             transform: scale(0.95); background: linear-gradient(135deg, #ff3b30, #c92a20);
             box-shadow: 0 5px 15px rgba(255, 59, 48, 0.4);
         }
-        .status-text { margin-top: 30px; font-size: 20px; font-weight: 500; height: 30px; }
+        .status-container {
+            margin-top: 30px; display: flex; flex-direction: column; align-items: center; height: 80px;
+        }
+        .status-text { font-size: 20px; font-weight: 500; margin-bottom: 10px; }
+        .play-btn {
+            padding: 8px 24px; font-size: 16px; color: #fff; background-color: #34c759;
+            border: none; border-radius: 20px; box-shadow: 0 4px 10px rgba(52, 199, 89, 0.3);
+            display: none; /* 默认隐藏 */
+        }
+        .play-btn:active { transform: scale(0.95); background-color: #2eb050; }
         #latency-dashboard {
             position: absolute; bottom: 5%; width: 90%;
             background: #fff; padding: 15px; border-radius: 16px;
@@ -54,7 +63,11 @@
     </div>
 
     <button class="record-btn" id="recordBtn">按住说话</button>
-    <div class="status-text" id="statusText">系统已就绪</div>
+    
+    <div class="status-container">
+        <div class="status-text" id="statusText">系统已就绪</div>
+        <button class="play-btn" id="playBtn">▶️ 播放翻译</button>
+    </div>
 
     <div id="latency-dashboard">
         📊 算力监控面板待命中...<br>
@@ -66,11 +79,66 @@
         let audioChunks = [];
         let currentForeignLang = "fr"; 
         
+        // --- 缓存最后一次 TTS 结果变量 ---
+        let latestTtsText = "";
+        let latestTtsLang = "";
+
         const recordBtn = document.getElementById('recordBtn');
         const statusText = document.getElementById('statusText');
+        const playBtn = document.getElementById('playBtn');
         const dashboard = document.getElementById('latency-dashboard');
         const langDisplay = document.getElementById('lang-display');
 
+        // --- 设备嗅探 ---
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+        // 预加载语音列表
+        if ('speechSynthesis' in window) {
+            speechSynthesis.getVoices();
+        }
+
+        // --- 纯净版语音合成 ---
+        function speakText(text, langCode) {
+            if (!('speechSynthesis' in window)) {
+                statusText.innerText = "❌ 浏览器不支持语音";
+                return;
+            }
+
+            const langMap = {
+                "zh": "zh-CN", "zh-cn": "zh-CN", 
+                "fr": "fr-FR", "en": "en-US", 
+                "es": "es-ES", "ja": "ja-JP", 
+                "ko": "ko-KR", "de": "de-DE", 
+                "ru": "ru-RU", "it": "it-IT",
+                "pt": "pt-BR"
+            };
+            const systemLang = langMap[langCode] || langCode;
+
+            window.speechSynthesis.cancel(); // 清理残留
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = systemLang;
+            utterance.rate = 1.0;
+
+            utterance.onstart = () => { statusText.innerText = "🔊 正在播报..."; };
+            utterance.onend = () => { statusText.innerText = "按住继续说话"; };
+            utterance.onerror = (e) => { 
+                console.error("播报错误", e); 
+                statusText.innerText = "按住继续说话"; 
+            };
+            
+            // 短暂延时防止 iOS cancel 吞并指令
+            setTimeout(() => { window.speechSynthesis.speak(utterance); }, 50);
+        }
+
+        // --- 绑定播放按钮事件 (用户主动点击触发，符合 WebKit 规范) ---
+        playBtn.addEventListener('click', () => {
+            if (latestTtsText) {
+                speakText(latestTtsText, latestTtsLang);
+            }
+        });
+
+        // ---------- 录音初始化 ----------
         async function initAudio() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -91,40 +159,7 @@
             }
         }
 
-        // 🎯 手机端原生 TTS 发声模块 (支持 99+ 语种动态回退)
-        function speakText(text, langCode) {
-            if (!('speechSynthesis' in window)) {
-                statusText.innerText = "❌ 浏览器不支持语音";
-                return;
-            }
-
-            // 🎯 扩展发音包映射表，承接后端发来的 2 字母短码
-            const langMap = {
-                "zh": "zh-CN", "zh-cn": "zh-CN", 
-                "fr": "fr-FR", "en": "en-US", 
-                "es": "es-ES", "ja": "ja-JP", 
-                "ko": "ko-KR", "de": "de-DE", 
-                "ru": "ru-RU", "it": "it-IT",
-                "pt": "pt-BR" // 适配巴西葡语口音
-            };
-            
-            // 查表，如果表里没有（比如荷兰语 nl），直接把短码喂给底层，触发操作系统的防御性降级
-            const systemLang = langMap[langCode] || langCode;
-
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = systemLang;
-            utterance.rate = 1.0; 
-
-            utterance.onstart = () => { statusText.innerText = "🔊 正在播报..."; };
-            utterance.onend = () => { statusText.innerText = "按住继续说话"; };
-            utterance.onerror = (e) => { 
-                console.error("播报错误", e); 
-                statusText.innerText = "按住继续说话"; 
-            };
-
-            window.speechSynthesis.speak(utterance);
-        }
-
+        // ---------- 发送录音到服务器 ----------
         async function sendAudioToServer(audioBlob) {
             statusText.innerText = "⏳ 算力矩阵处理中...";
             
@@ -141,7 +176,6 @@
                 const total_frontend_time = t_frontend_end - t_frontend_start;
 
                 if (response.ok) {
-                    // 🎯 解析返回的纯 JSON 数据
                     const data = await response.json();
                     const networkTime = total_frontend_time - data.metrics.gateway_ms;
 
@@ -152,7 +186,7 @@
                         langDisplay.innerText = `环境语种: 自动检测 (${currentForeignLang})`;
                     }
 
-                    // 更新硬核探针仪表盘，TTS 耗时固定为 0ms
+                    // 更新监控面板
                     dashboard.innerHTML = 
                         `🚀 总响应: <span class="metric">${total_frontend_time}ms</span><br>` +
                         `🌐 Cloudflare: <span class="metric">${networkTime}ms</span> | 🗼 内网路由: <span class="metric">${data.metrics.gateway_ms}ms</span><br>` +
@@ -160,8 +194,17 @@
                         `🧠 大脑(LLM): <span class="metric">${data.metrics.llm_ms}ms</span><br>` +
                         `👄 发声(Client): <span class="metric">0ms (边缘计算)</span>`;
 
-                    // 唤醒本地发音
-                    speakText(data.text, data.target_tts_lang);
+                    // --- iOS 策略分流 ---
+                    if (isIOS) {
+                        // 拦截自动播放，缓存变量，暴露播放按钮
+                        latestTtsText = data.text;
+                        latestTtsLang = data.target_tts_lang;
+                        playBtn.style.display = 'inline-block';
+                        statusText.innerText = "✅ 翻译完成";
+                    } else {
+                        // 非 iOS 平台继续尝试自动播报
+                        speakText(data.text, data.target_tts_lang);
+                    }
 
                 } else {
                     statusText.innerText = "❌ 翻译失败，请重试";
@@ -172,13 +215,17 @@
             }
         }
 
+        // ---------- 录音控制 ----------
         const startRecording = (e) => {
             e.preventDefault();
             if (!mediaRecorder) return;
+            
             recordBtn.classList.add('recording');
             recordBtn.innerText = "松开发送";
             statusText.innerText = "🎙️ 正在录音...";
+            playBtn.style.display = 'none'; // 录音时隐藏播放按钮
             audioChunks = [];
+            
             mediaRecorder.start();
         };
 
@@ -190,12 +237,14 @@
             mediaRecorder.stop();
         };
 
-        recordBtn.addEventListener('touchstart', startRecording, {passive: false});
+        // 绑定事件
+        recordBtn.addEventListener('touchstart', startRecording, { passive: false });
         recordBtn.addEventListener('touchend', stopRecording);
         recordBtn.addEventListener('mousedown', startRecording);
         recordBtn.addEventListener('mouseup', stopRecording);
         recordBtn.addEventListener('mouseleave', stopRecording);
 
+        // 页面加载初始化
         window.onload = initAudio;
     </script>
 </body>
