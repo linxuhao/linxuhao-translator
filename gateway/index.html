@@ -17,7 +17,21 @@
             display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
             height: 100vh; background-color: #f5f5f7; color: #333; overflow-x: hidden;
         }
-        .header { margin-top: 5vh; text-align: center; width: 100%; flex-shrink: 0; }
+
+        /* 🎯 新增：GitHub 开源徽章悬浮样式 */
+        .github-link {
+            position: absolute;
+            top: 20px; right: 20px;
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 12px; background: rgba(0, 0, 0, 0.05);
+            border-radius: 20px; text-decoration: none; color: #1d1d1f;
+            font-size: 13px; font-weight: 600; transition: background 0.2s;
+            z-index: 100; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        }
+        .github-link:active { background: rgba(0, 0, 0, 0.15); }
+        .github-link svg { width: 18px; height: 18px; fill: currentColor; }
+
+        .header { margin-top: 6vh; text-align: center; width: 100%; flex-shrink: 0; position: relative; }
         h1 { margin: 0; font-size: 24px; color: #1d1d1f; }
         .lang-indicator { margin-top: 8px; font-size: 14px; color: #86868b; background: #e8e8ed; padding: 4px 12px; border-radius: 12px; display: inline-block; }
         .controls-panel { margin-top: 10px; display: flex; justify-content: center; gap: 10px; }
@@ -50,7 +64,6 @@
         .btn-play:active { background-color: #2eb050; }
         .btn-export { background-color: #5856d6; box-shadow: 0 4px 10px rgba(88, 86, 214, 0.3); }
         .btn-export:active { background-color: #4b49b8; }
-        /* 🎯 新增清空按钮样式 */
         .btn-clear { background-color: #ff3b30; box-shadow: 0 4px 10px rgba(255, 59, 48, 0.3); }
         .btn-clear:active { background-color: #c92a20; }
 
@@ -72,6 +85,13 @@
     </style>
 </head>
 <body>
+
+    <a href="https://github.com/linxuhao/linxuhao-translator" target="_blank" class="github-link" title="View Source on GitHub">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
+        </svg>
+        GitHub
+    </a>
 
     <div class="header">
         <h1>🗣️ 随身翻译官</h1>
@@ -140,7 +160,7 @@
         const statusText = document.getElementById('statusText');
         const playSelectedBtn = document.getElementById('playSelectedBtn');
         const exportBtn = document.getElementById('exportBtn');
-        const clearBtn = document.getElementById('clearBtn'); // 🎯 绑定清空按钮
+        const clearBtn = document.getElementById('clearBtn');
         const dashboard = document.getElementById('latency-dashboard');
         const langDisplay = document.getElementById('lang-display');
         const nativeLangSelect = document.getElementById('nativeLang');
@@ -149,14 +169,11 @@
 
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-        // 🎯 持久化辅助函数：保存队列到 LocalStorage
         function syncHistoryToStorage() {
             localStorage.setItem('ttsQueueHistory', JSON.stringify(translationQueue));
         }
 
-        // 🎯 物理初始化：读取 LocalStorage 中的偏好与历史
         function initStorageData() {
-            // 1. 恢复母语设定
             const savedLang = localStorage.getItem('nativeLangPref');
             if (savedLang) {
                 nativeLangSelect.value = savedLang;
@@ -168,12 +185,10 @@
                 localStorage.setItem('nativeLangPref', nativeLangSelect.value);
             }
 
-            // 2. 恢复历史翻译记录
             const savedHistory = localStorage.getItem('ttsQueueHistory');
             if (savedHistory) {
                 try {
                     translationQueue = JSON.parse(savedHistory);
-                    // 防止 iOS 重新加载时遗留一大堆默认勾选而导致的播放风暴，重载时默认清空所有勾选
                     translationQueue.forEach(item => item.checked = false); 
                     renderHistory();
                 } catch (e) {
@@ -183,10 +198,8 @@
             }
         }
         
-        // 执行初始化
         initStorageData();
 
-        // 🎯 监听母语选择变更并保存
         nativeLangSelect.addEventListener('change', (e) => {
             localStorage.setItem('nativeLangPref', e.target.value);
         });
@@ -209,7 +222,7 @@
                 checkbox.checked = item.checked;
                 checkbox.addEventListener('change', (e) => {
                     translationQueue[index].checked = e.target.checked;
-                    syncHistoryToStorage(); // 状态改变，同步存储
+                    syncHistoryToStorage();
                 });
 
                 const contentDiv = document.createElement('div');
@@ -248,7 +261,7 @@
                     item.checked = false; 
                     item.played = true;   
                     renderHistory();      
-                    syncHistoryToStorage(); // 播放完毕状态改变，同步存储
+                    syncHistoryToStorage();
                     
                     if (i === itemsToPlay.length - 1) {
                         statusText.innerText = "按住继续说话"; 
@@ -288,7 +301,6 @@
             URL.revokeObjectURL(url);
         });
 
-        // 🎯 物理清空逻辑
         clearBtn.addEventListener('click', () => {
             if (translationQueue.length === 0) return;
             const confirmDelete = confirm("确认要清空所有翻译记录吗？此操作不可恢复。");
@@ -355,7 +367,6 @@
                         played: false
                     };
                     
-                    // 压入队列并同步到本地存储
                     translationQueue.push(newItem);
                     syncHistoryToStorage();
                     renderHistory();
@@ -375,7 +386,7 @@
                             utterance.onend = () => { 
                                 newItem.played = true; 
                                 renderHistory(); 
-                                syncHistoryToStorage(); // 播放完毕同步状态
+                                syncHistoryToStorage();
                             };
                             window.speechSynthesis.speak(utterance);
                         }
