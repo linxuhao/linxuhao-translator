@@ -173,6 +173,7 @@ async def process_voice(
         # ----------------------------------
         t_end = time.time()
         response_data = {
+            "original_text": asr_text, # 🎯 物理补齐：将 ASR 听写的原文挂载至 JSON 载荷
             "text": trans_text,
             "target_tts_lang": target_tts_lang,
             "detected_foreign_lang": detected_foreign_lang,

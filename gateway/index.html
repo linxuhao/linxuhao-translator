@@ -14,61 +14,59 @@
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             margin: 0; padding: 0;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            height: 100vh; background-color: #f5f5f7; color: #333;
+            display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+            height: 100vh; background-color: #f5f5f7; color: #333; overflow-x: hidden;
         }
-        .header { position: absolute; top: 5%; text-align: center; width: 100%; }
-        h1 { margin: 0; font-size: 28px; color: #1d1d1f; }
-        .lang-indicator {
-            margin-top: 8px; font-size: 16px; color: #86868b;
-            background: #e8e8ed; padding: 4px 12px; border-radius: 12px;
-            display: inline-block;
+        .header { margin-top: 5vh; text-align: center; width: 100%; flex-shrink: 0; }
+        h1 { margin: 0; font-size: 24px; color: #1d1d1f; }
+        .lang-indicator { margin-top: 8px; font-size: 14px; color: #86868b; background: #e8e8ed; padding: 4px 12px; border-radius: 12px; display: inline-block; }
+        .controls-panel { margin-top: 10px; display: flex; justify-content: center; gap: 10px; }
+        .lang-select { padding: 6px 10px; border-radius: 8px; border: 1px solid #d2d2d7; font-size: 14px; background: #fff; outline: none; }
+        .debug-toggle { font-size: 14px; color: #86868b; display: flex; align-items: center; gap: 5px; }
+
+        /* 🎯 新增：TTS 历史队列容器 */
+        .history-container {
+            width: 90%; max-width: 500px; flex-grow: 1; margin: 15px 0;
+            background: #fff; border-radius: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px;
         }
-        
-        /* 新增控制面板样式 */
-        .controls-panel {
-            margin-top: 15px; display: flex; flex-direction: column; align-items: center; gap: 10px;
+        .history-item {
+            display: flex; align-items: flex-start; gap: 10px; padding: 10px;
+            background: #f9f9f9; border-radius: 12px; border-left: 4px solid #007aff;
+            transition: background 0.3s;
         }
-        .lang-select {
-            padding: 8px 12px; border-radius: 8px; border: 1px solid #d2d2d7; 
-            font-size: 14px; background: #fff; outline: none;
+        .history-item.played { border-left-color: #34c759; opacity: 0.7; }
+        .history-checkbox { margin-top: 4px; transform: scale(1.2); accent-color: #007aff; }
+        .history-content { flex-grow: 1; font-size: 15px; line-height: 1.4; }
+        .original-text { color: #888; font-size: 12px; margin-bottom: 4px; }
+        .translated-text { color: #1d1d1f; font-weight: 500; }
+
+        .interaction-area { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; width: 100%; padding-bottom: 5vh; background: #f5f5f7; z-index: 10;}
+        .action-bar { display: flex; gap: 15px; margin-bottom: 15px; width: 90%; max-width: 500px; justify-content: space-between; }
+        .action-btn {
+            flex: 1; padding: 12px 0; font-size: 15px; font-weight: 600; color: #fff;
+            border: none; border-radius: 12px; display: flex; align-items: center; justify-content: center; gap: 5px;
         }
-        .debug-toggle {
-            font-size: 14px; color: #86868b; display: flex; align-items: center; gap: 5px;
-        }
+        .btn-play { background-color: #34c759; box-shadow: 0 4px 10px rgba(52, 199, 89, 0.3); }
+        .btn-play:active { background-color: #2eb050; }
+        .btn-export { background-color: #5856d6; box-shadow: 0 4px 10px rgba(88, 86, 214, 0.3); }
+        .btn-export:active { background-color: #4b49b8; }
 
         .record-btn {
-            width: 220px; height: 220px; border-radius: 50%;
+            width: 140px; height: 140px; border-radius: 50%;
             background: linear-gradient(135deg, #007aff, #005bb5);
-            color: white; font-size: 28px; font-weight: bold;
-            border: none; box-shadow: 0 10px 30px rgba(0, 122, 255, 0.4);
-            transition: all 0.2s ease; display: flex; align-items: center; justify-content: center;
-            user-select: none; -webkit-user-select: none; margin-top: 20px;
+            color: white; font-size: 20px; font-weight: bold; border: none;
+            box-shadow: 0 10px 20px rgba(0, 122, 255, 0.4); transition: all 0.2s ease;
+            user-select: none; -webkit-user-select: none;
         }
-        .record-btn:active, .record-btn.recording {
-            transform: scale(0.95); background: linear-gradient(135deg, #ff3b30, #c92a20);
-            box-shadow: 0 5px 15px rgba(255, 59, 48, 0.4);
-        }
-        .status-container {
-            margin-top: 30px; display: flex; flex-direction: column; align-items: center; height: 80px;
-        }
-        .status-text { font-size: 20px; font-weight: 500; margin-bottom: 10px; }
-        .play-btn {
-            padding: 8px 24px; font-size: 16px; color: #fff; background-color: #34c759;
-            border: none; border-radius: 20px; box-shadow: 0 4px 10px rgba(52, 199, 89, 0.3);
-            display: none;
-        }
-        .play-btn:active { transform: scale(0.95); background-color: #2eb050; }
-        
+        .record-btn:active, .record-btn.recording { transform: scale(0.95); background: linear-gradient(135deg, #ff3b30, #c92a20); box-shadow: 0 5px 15px rgba(255, 59, 48, 0.4); }
+        .status-text { font-size: 16px; font-weight: 500; margin-top: 15px; height: 20px; color: #666;}
+
         #latency-dashboard {
-            position: absolute; bottom: 5%; width: 90%; max-height: 25vh; overflow-y: auto;
-            background: #fff; padding: 15px; border-radius: 16px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            font-size: 12px; color: #666; font-family: monospace; line-height: 1.6;
-            text-align: left; display: none; /* 默认隐藏，由 Debug 控制 */
+            position: fixed; top: 10%; width: 90%; max-height: 40vh; overflow-y: auto; z-index: 100;
+            background: rgba(0,0,0,0.8); color: #0f0; padding: 15px; border-radius: 12px;
+            font-size: 12px; font-family: monospace; line-height: 1.5; text-align: left; display: none;
         }
-        .metric { font-weight: bold; color: #1d1d1f; }
-        .log-entry { border-top: 1px dashed #eee; margin-top: 5px; padding-top: 5px; color: #888; }
     </style>
 </head>
 <body>
@@ -76,7 +74,6 @@
     <div class="header">
         <h1>🗣️ 随身翻译官</h1>
         <div class="lang-indicator" id="lang-display">环境语种: 待检测</div>
-        
         <div class="controls-panel">
             <select class="lang-select" id="nativeLang">
                 <option value="zh">中文 (zh)</option>
@@ -110,42 +107,45 @@
                 <option value="mk">Македонски (mk)</option>
                 <option value="ro">Română (ro)</option>
             </select>
-            <label class="debug-toggle">
-                <input type="checkbox" id="debugCheckbox"> 开启 Debug 模式
-            </label>
+            <label class="debug-toggle"><input type="checkbox" id="debugCheckbox"> Debug</label>
         </div>
     </div>
 
-    <button class="record-btn" id="recordBtn">按住说话</button>
-    
-    <div class="status-container">
+    <div class="history-container" id="historyList">
+        </div>
+
+    <div class="interaction-area">
+        <div class="action-bar">
+            <button class="action-btn btn-play" id="playSelectedBtn">▶️ 播放勾选</button>
+            <button class="action-btn btn-export" id="exportBtn">💾 导出记录</button>
+        </div>
+        
+        <button class="record-btn" id="recordBtn">按住说话</button>
         <div class="status-text" id="statusText">系统已就绪</div>
-        <button class="play-btn" id="playBtn">▶️ 播放翻译</button>
     </div>
 
-    <div id="latency-dashboard">
-        📊 算力监控面板待命中...<br>
-        请进行第一次对话以激活探针。
-    </div>
+    <div id="latency-dashboard">监控探针...</div>
 
     <script>
         let mediaRecorder;
         let audioChunks = [];
         let currentForeignLang = "fr"; 
-        let latestTtsText = "";
-        let latestTtsLang = "";
+        
+        // 🎯 核心数据结构：TTS 队列
+        let translationQueue = []; 
 
         const recordBtn = document.getElementById('recordBtn');
         const statusText = document.getElementById('statusText');
-        const playBtn = document.getElementById('playBtn');
+        const playSelectedBtn = document.getElementById('playSelectedBtn');
+        const exportBtn = document.getElementById('exportBtn');
         const dashboard = document.getElementById('latency-dashboard');
         const langDisplay = document.getElementById('lang-display');
         const nativeLangSelect = document.getElementById('nativeLang');
         const debugCheckbox = document.getElementById('debugCheckbox');
+        const historyList = document.getElementById('historyList');
 
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-        // --- 初始化 Native Language ---
         function initNativeLanguage() {
             const sysLangCode = (navigator.language || navigator.userLanguage || "zh").split('-')[0].toLowerCase();
             const options = Array.from(nativeLangSelect.options);
@@ -154,159 +154,203 @@
         }
         initNativeLanguage();
 
-        // --- Debug 面板显示控制 ---
         debugCheckbox.addEventListener('change', (e) => {
             dashboard.style.display = e.target.checked ? 'block' : 'none';
         });
 
-        if ('speechSynthesis' in window) {
-            speechSynthesis.getVoices();
+        if ('speechSynthesis' in window) speechSynthesis.getVoices();
+
+        // 🎯 渲染队列 UI
+        function renderHistory() {
+            historyList.innerHTML = '';
+            translationQueue.forEach((item, index) => {
+                const div = document.createElement('div');
+                div.className = `history-item ${item.played ? 'played' : ''}`;
+                
+                // 物理 Checkbox 绑定与状态回写
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'history-checkbox';
+                checkbox.checked = item.checked;
+                checkbox.addEventListener('change', (e) => {
+                    translationQueue[index].checked = e.target.checked;
+                });
+
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'history-content';
+                contentDiv.innerHTML = `
+                    <div class="original-text">${item.sourceLang.toUpperCase()}: ${item.original || "..."}</div>
+                    <div class="translated-text">${item.targetLang.toUpperCase()}: ${item.translated}</div>
+                `;
+
+                div.appendChild(checkbox);
+                div.appendChild(contentDiv);
+                historyList.appendChild(div);
+            });
+            // 自动滚动到底部
+            historyList.scrollTop = historyList.scrollHeight;
         }
 
-        function speakText(text, langCode) {
+        // 🎯 异步串行播放引擎 (兼容 iOS 连续调用)
+        async function playCheckedItems() {
             if (!('speechSynthesis' in window)) return;
-            const langMap = { "zh": "zh-CN", "fr": "fr-FR", "en": "en-US", "es": "es-ES", "ja": "ja-JP", "ko": "ko-KR", "de": "de-DE", "ru": "ru-RU", "it": "it-IT", "pt": "pt-BR" };
-            const systemLang = langMap[langCode] || langCode;
+            window.speechSynthesis.cancel(); // 物理打断当前播放
 
-            window.speechSynthesis.cancel();
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = systemLang;
-            utterance.rate = 1.0;
+            const itemsToPlay = translationQueue.filter(item => item.checked);
+            if (itemsToPlay.length === 0) return;
 
-            utterance.onstart = () => { statusText.innerText = "🔊 正在播报..."; };
-            utterance.onend = () => { statusText.innerText = "按住继续说话"; };
-            utterance.onerror = () => { statusText.innerText = "按住继续说话"; };
+            statusText.innerText = "🔊 正在播报...";
             
-            setTimeout(() => { window.speechSynthesis.speak(utterance); }, 50);
-        }
+            // 将发音推入浏览器内部队列 (iOS 强依赖同一个用户手势内完成 push)
+            for (let i = 0; i < itemsToPlay.length; i++) {
+                const item = itemsToPlay[i];
+                const langMap = { "zh": "zh-CN", "fr": "fr-FR", "en": "en-US", "es": "es-ES", "ja": "ja-JP", "ko": "ko-KR", "de": "de-DE", "ru": "ru-RU", "it": "it-IT", "pt": "pt-BR" };
+                const systemLang = langMap[item.targetLang] || item.targetLang;
 
-        playBtn.addEventListener('click', () => {
-            if (latestTtsText) speakText(latestTtsText, latestTtsLang);
-        });
+                const utterance = new SpeechSynthesisUtterance(item.translated);
+                utterance.lang = systemLang;
+                utterance.rate = 1.0;
 
-// ---------- 录音初始化 ----------
-        async function initAudio() {
-            try {
-                // 1. 前置安全上下文与 API 检测
-                if (!window.isSecureContext) {
-                    throw new Error("iOS 限制: 必须使用 HTTPS 或 Localhost");
-                }
-                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    throw new Error("浏览器不支持录音 API (navigator.mediaDevices 缺失)");
-                }
-                if (typeof MediaRecorder === 'undefined') {
-                    throw new Error("当前 iOS 版本过低，不支持 MediaRecorder");
-                }
-
-                // 2. 请求麦克风权限
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                
-                // 3. 兼容老版本 Safari 的 MIME Type
-                let options = { mimeType: 'audio/webm' };
-                if (!MediaRecorder.isTypeSupported('audio/webm')) {
-                    options = { mimeType: 'audio/mp4' }; // 老版 iOS 备用格式
-                }
-                
-                mediaRecorder = new MediaRecorder(stream, options);
-                
-                mediaRecorder.ondataavailable = event => {
-                    if (event.data.size > 0) audioChunks.push(event.data);
+                // 绑定单个音频播放结束的钩子
+                utterance.onend = () => {
+                    item.checked = false; // 放完物理 uncheck
+                    item.played = true;   // 标记已播放
+                    renderHistory();      // 局部刷新 UI
+                    
+                    if (i === itemsToPlay.length - 1) {
+                        statusText.innerText = "按住继续说话"; // 队列播放完毕
+                    }
                 };
 
+                utterance.onerror = (e) => { 
+                    console.error("TTS Error:", e);
+                    if (i === itemsToPlay.length - 1) statusText.innerText = "按住继续说话"; 
+                };
+
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        playSelectedBtn.addEventListener('click', playCheckedItems);
+
+        // 🎯 物理导出为 TXT
+        exportBtn.addEventListener('click', () => {
+            if (translationQueue.length === 0) {
+                alert("当前无翻译记录可导出");
+                return;
+            }
+            let txtContent = "=== 随身翻译官 历史记录 ===\n\n";
+            translationQueue.forEach((item, index) => {
+                txtContent += `[${index + 1}] 原文 (${item.sourceLang}): ${item.original || "未知"}\n`;
+                txtContent += `    翻译 (${item.targetLang}): ${item.translated}\n\n`;
+            });
+
+            const blob = new Blob([txtContent], { type: "text/plain;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `翻译记录_${new Date().toISOString().slice(0,10)}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+        // ---------- 录音引擎 ----------
+        async function initAudio() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                let options = { mimeType: 'audio/webm' };
+                if (!MediaRecorder.isTypeSupported('audio/webm')) options = { mimeType: 'audio/mp4' }; 
+                mediaRecorder = new MediaRecorder(stream, options);
+                mediaRecorder.ondataavailable = event => { if (event.data.size > 0) audioChunks.push(event.data); };
                 mediaRecorder.onstop = async () => {
                     const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
                     audioChunks = [];
                     await sendAudioToServer(audioBlob);
                 };
             } catch (err) {
-                console.error("Mic initialization failed:", err);
-                // 捕获系统级报错并展示
-                const errorMsg = err.name === 'NotAllowedError' ? "麦克风被拒或被系统占用" 
-                               : err.name === 'NotFoundError' ? "未检测到麦克风硬件" 
-                               : err.message || err.name || "未知麦克风错误";
-                               
-                statusText.innerText = `⚠️ 录音失败: ${errorMsg}`;
-                statusText.style.color = "red";
-                statusText.style.fontSize = "16px"; // 缩小字号防溢出
+                statusText.innerText = `⚠️ 录音失败: ${err.name}`; statusText.style.color = "red";
             }
         }
 
         async function sendAudioToServer(audioBlob) {
             statusText.innerText = "⏳ 算力矩阵处理中...";
-            
             const formData = new FormData();
             formData.append("audio_file", audioBlob, "recording.webm");
-            formData.append("native_lang", nativeLangSelect.value); // 动态获取 Native Lang
+            formData.append("native_lang", nativeLangSelect.value); 
             formData.append("last_foreign_lang", currentForeignLang);
-            formData.append("debug", debugCheckbox.checked); // 传递 debug 状态
+            formData.append("debug", debugCheckbox.checked);
 
-            const t_frontend_start = Date.now();
+            const t_start = Date.now();
 
             try {
                 const response = await fetch("/api/voice", { method: "POST", body: formData });
-                const t_frontend_end = Date.now();
-                const total_frontend_time = t_frontend_end - t_frontend_start;
+                const total_time = Date.now() - t_start;
 
                 if (response.ok) {
                     const data = await response.json();
-                    const networkTime = total_frontend_time - data.metrics.gateway_ms;
-
-                    const newForeignLang = data.detected_foreign_lang;
                     
-                    // 只要后端返回了有效的外语（非当前设定的母语），就更新外语状态变量
+                    // 🎯 修复：外语检测状态机剥离 if 阻断，强制每次刷新 UI
+                    const newForeignLang = data.detected_foreign_lang;
                     if (newForeignLang && newForeignLang !== nativeLangSelect.value) {
                         currentForeignLang = newForeignLang;
                     }
-                    
-                    // 物理层面：剥离 if 阻断，强制每次请求成功后刷新 UI 消除“待检测”字样
+                    // 🎯 物理层面：剥离 if 阻断，强制每次请求成功后刷新 UI 消除“待检测”字样
                     langDisplay.innerText = `环境语种: 自动检测 (${currentForeignLang})`;
 
-                    // 构建指标与后端日志视图
-                    let logsHtml = "";
-                    if (data.logs && data.logs.length > 0) {
-                        logsHtml = `<div class="log-entry"><strong>Backend Logs:</strong><br>${data.logs.join('<br>')}</div>`;
-                    }
+                    // 🎯 修复逻辑：通过逆推 Target 来绝对判定 Source
+                    const isSpokeNative = data.target_tts_lang !== nativeLangSelect.value;
+                    const actualSourceLang = isSpokeNative ? nativeLangSelect.value : data.detected_foreign_lang;
 
-                    dashboard.innerHTML = 
-                        `🚀 总响应: <span class="metric">${total_frontend_time}ms</span><br>` +
-                        `🌐 网络传输: <span class="metric">${networkTime}ms</span> | 🗼 网关处理: <span class="metric">${data.metrics.gateway_ms}ms</span><br>` +
-                        `👂 听觉(ASR): <span class="metric">${data.metrics.asr_ms}ms</span><br>` +
-                        `🧠 大脑(LLM): <span class="metric">${data.metrics.llm_ms}ms</span>` + logsHtml;
+                    // 🎯 补齐：读取 data.original_text 充实队列渲染
+                    const newItem = {
+                        original: data.original_text || "未知", 
+                        translated: data.text,
+                        sourceLang: actualSourceLang,       // 修复后：准确显示 zh 或 yue
+                        targetLang: data.target_tts_lang,   // 准确显示 yue 或 zh
+                        checked: isIOS ? true : false, 
+                        played: false
+                    };
+                    translationQueue.push(newItem);
+                    renderHistory();
+
+                    if (data.logs) {
+                        dashboard.innerHTML = `总耗时: ${total_time}ms<br>ASR: ${data.metrics.asr_ms}ms | LLM: ${data.metrics.llm_ms}ms<br>` + 
+                                              `<div style="border-top:1px solid #333;margin-top:5px;padding-top:5px;">${data.logs.join('<br>')}</div>`;
+                    }
 
                     if (isIOS) {
-                        latestTtsText = data.text;
-                        latestTtsLang = data.target_tts_lang;
-                        playBtn.style.display = 'inline-block';
-                        statusText.innerText = "✅ 翻译完成";
+                        statusText.innerText = "✅ 翻译完成，请点击播放";
                     } else {
-                        speakText(data.text, data.target_tts_lang);
+                        statusText.innerText = "✅ 翻译完成";
+                        if ('speechSynthesis' in window) {
+                            const utterance = new SpeechSynthesisUtterance(data.text);
+                            utterance.lang = data.target_tts_lang === 'zh' ? 'zh-CN' : data.target_tts_lang;
+                            utterance.onend = () => { newItem.played = true; renderHistory(); };
+                            window.speechSynthesis.speak(utterance);
+                        }
                     }
-
                 } else {
-                    statusText.innerText = "❌ 翻译失败，请重试";
+                    statusText.innerText = "❌ 翻译失败";
                 }
             } catch (error) {
-                console.error(error);
-                statusText.innerText = "❌ 网络连接异常";
+                console.error(error); statusText.innerText = "❌ 网络异常";
             }
         }
 
         const startRecording = (e) => {
             e.preventDefault();
             if (!mediaRecorder) return;
-            recordBtn.classList.add('recording');
-            recordBtn.innerText = "松开发送";
+            recordBtn.classList.add('recording'); recordBtn.innerText = "松开发送";
             statusText.innerText = "🎙️ 正在录音...";
-            playBtn.style.display = 'none';
-            audioChunks = [];
-            mediaRecorder.start();
+            audioChunks = []; mediaRecorder.start();
         };
 
         const stopRecording = (e) => {
             e.preventDefault();
             if (!mediaRecorder || mediaRecorder.state === "inactive") return;
-            recordBtn.classList.remove('recording');
-            recordBtn.innerText = "按住说话";
+            recordBtn.classList.remove('recording'); recordBtn.innerText = "按住说话";
             mediaRecorder.stop();
         };
 
