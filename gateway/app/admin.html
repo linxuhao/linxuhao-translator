@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统管控中心 - 随身翻译官</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 20px; background-color: #f5f5f7; color: #333;
+        }
+        .container {
+            max-width: 800px; margin: 0 auto; background: #fff; 
+            border-radius: 16px; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+        h1 { margin-top: 0; color: #1d1d1f; font-size: 24px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eaeaea; }
+        th { background-color: #f9f9fb; color: #666; font-weight: 600; }
+        tr:hover { background-color: #f9f9f9; }
+        
+        .role-badge {
+            padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold;
+        }
+        .role-admin { background-color: #1d1d1f; color: #fff; }
+        .role-vip { background-color: #ff9500; color: #fff; }
+        .role-user { background-color: #e5e5ea; color: #666; }
+        
+        .toggle-btn {
+            padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer;
+            font-size: 13px; font-weight: 600; transition: all 0.2s;
+        }
+        .btn-upgrade { background-color: #34c759; color: white; }
+        .btn-downgrade { background-color: #ff3b30; color: white; }
+        
+        .refresh-bar { display: flex; justify-content: space-between; align-items: center; }
+        .refresh-btn { 
+            background: #007aff; color: white; border: none; padding: 8px 16px; 
+            border-radius: 8px; cursor: pointer; font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="refresh-bar">
+        <h1>🛡️ 算力网关管控中心</h1>
+        <button class="refresh-btn" onclick="fetchUsers()">🔄 刷新数据</button>
+    </div>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>用户邮箱 (身份标识)</th>
+                <th>调用总计</th>
+                <th>最后活跃时间</th>
+                <th>当前权重级别</th>
+                <th>VIP 权限分配</th>
+            </tr>
+        </thead>
+        <tbody id="userTableBody">
+            <tr><td colspan="5" style="text-align: center; color: #888;">正在加载加密探针数据...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+    async function fetchUsers() {
+        try {
+            const response = await fetch('/api/admin/users');
+            if (!response.ok) {
+                if (response.status === 403) alert("拦截：非法的 Admin 身份");
+                return;
+            }
+            const data = await response.json();
+            renderTable(data);
+        } catch (error) {
+            console.error("Fetch error:", error);
+        }
+    }
+
+    function renderTable(users) {
+        const tbody = document.getElementById('userTableBody');
+        tbody.innerHTML = '';
+        
+        users.forEach(user => {
+            const tr = document.createElement('tr');
+            
+            // 角色徽章渲染
+            let roleBadge = '';
+            if (user.role === 'admin') roleBadge = '<span class="role-badge role-admin">ADMIN (P1)</span>';
+            else if (user.role === 'vip') roleBadge = '<span class="role-badge role-vip">VIP (P1)</span>';
+            else roleBadge = '<span class="role-badge role-user">USER (P2)</span>';
+            
+            // 操作按钮渲染
+            let actionBtn = '';
+            if (user.role === 'admin') {
+                actionBtn = '<span style="color:#999;font-size:12px;">系统底座</span>';
+            } else if (user.role === 'vip') {
+                actionBtn = `<button class="toggle-btn btn-downgrade" onclick="toggleVip('${user.username}', 'false')">撤销 VIP</button>`;
+            } else {
+                actionBtn = `<button class="toggle-btn btn-upgrade" onclick="toggleVip('${user.username}', 'true')">提拔为 VIP</button>`;
+            }
+
+            tr.innerHTML = `
+                <td style="font-family: monospace;">${user.username}</td>
+                <td style="font-weight: bold;">${user.request_count} 次</td>
+                <td style="color: #666; font-size: 13px;">${user.last_active}</td>
+                <td>${roleBadge}</td>
+                <td>${actionBtn}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function toggleVip(username, isVip) {
+        const formData = new FormData();
+        formData.append("username", username);
+        formData.append("is_vip", isVip);
+
+        try {
+            const response = await fetch('/api/admin/set_vip', {
+                method: 'POST',
+                body: formData
+            });
+            if (response.ok) {
+                fetchUsers(); // 修改成功后重新拉取
+            }
+        } catch (error) {
+            console.error("Toggle error:", error);
+        }
+    }
+
+    // 初始加载
+    window.onload = fetchUsers;
+</script>
+
+</body>
+</html>

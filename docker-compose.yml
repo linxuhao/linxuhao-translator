@@ -27,7 +27,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./gateway:/app
+      - ./gateway/app:/app
     restart: unless-stopped
 
   # ==========================================
@@ -81,6 +81,6 @@ services:
       - HIP_VISIBLE_DEVICES=1 # 物理隔离至 7800 XT
       - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
     volumes:
-      - ./qwen3-asr:/app
+      - ./qwen3-asr/app:/app
       - ~/.cache/huggingface:/root/.cache/huggingface # 缓存模型，避免重复下载
     restart: unless-stopped

@@ -14,5 +14,5 @@ RUN pip install --no-cache-dir transformers uvicorn gunicorn fastapi python-mult
 
 WORKDIR /app
 
-# 🎯 核心并发引擎启动：拉起 3 个 Worker，榨取 7800 XT 显存实现真·并发
+# 🎯 核心并发引擎启动：拉起 2 个 Worker，榨取 7800 XT 显存实现真·并发
 CMD ["gunicorn", "app:app", "-w", "2", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--timeout", "120"]
