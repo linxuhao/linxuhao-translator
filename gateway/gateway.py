@@ -136,11 +136,12 @@ async def process_voice(
         target_lang_full_name = LANGUAGES.get(target_tts_lang, target_tts_lang).title()
         
         if target_tts_lang == "zh":
-            target_lang_full_name = "简体中文"
+            target_lang_full_name = "中文-普通话"
             
         instruction = f"将user的句子直接翻译为{target_lang_full_name}。"
         system_prompt = f"""{instruction}
 如果翻译是中文对中文，那么按照输入可能是方言来翻译。
+翻译有礼貌且口语化一些。
 必须严格返回JSON格式，禁止输出其他任何字符,:
 {{"text": ""}}"""
 
@@ -151,7 +152,7 @@ async def process_voice(
                 {"role": "user", "content": asr_text}
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.0, 
+            "temperature": 0.5, 
             "tool_choice": "none",
             "max_tokens": 256
         }
