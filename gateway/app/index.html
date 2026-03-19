@@ -4,105 +4,57 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#007aff">
-    <link rel="apple-touch-icon" href="/resources/icon.png" crossorigin="use-credentials">
-    <link rel="manifest" href="/resources/manifest.json" crossorigin="use-credentials">
+    <meta name="theme-color" content="#f5f5f7">
     <title>随身翻译官</title>
     <style>
         * { box-sizing: border-box; touch-action: manipulation; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            margin: 0; padding: 0;
-            display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-            height: 100vh; background-color: #f5f5f7; color: #333; overflow-x: hidden;
-        }
-
-        /* 🎯 新增：GitHub 开源徽章悬浮样式 */
-        .github-link {
-            position: absolute;
-            top: 20px; right: 20px;
-            display: flex; align-items: center; gap: 6px;
-            padding: 6px 12px; background: rgba(0, 0, 0, 0.05);
-            border-radius: 20px; text-decoration: none; color: #1d1d1f;
-            font-size: 13px; font-weight: 600; transition: background 0.2s;
-            z-index: 100; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-        }
-        .github-link:active { background: rgba(0, 0, 0, 0.15); }
-        .github-link svg { width: 18px; height: 18px; fill: currentColor; }
-        .admin-link {
-            position: absolute;
-            top: 20px; left: 20px; /* 🎯 左上角，与右上角 GitHub 对称 */
-            display: none; /* 🎯 默认物理隐藏 */
-            align-items: center; gap: 6px;
-            padding: 6px 12px; background: rgba(0, 122, 255, 0.1);
-            border-radius: 20px; text-decoration: none; color: #007aff;
-            font-size: 13px; font-weight: 600; transition: background 0.2s;
-            z-index: 100; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-        }
-        .admin-link:active { background: rgba(0, 122, 255, 0.2); }
-
-        .header { margin-top: 6vh; text-align: center; width: 100%; flex-shrink: 0; position: relative; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; height: 100vh; background-color: #f5f5f7; color: #333; overflow-x: hidden; }
+        .header { margin-top: 5vh; text-align: center; width: 100%; flex-shrink: 0; position: relative; }
         h1 { margin: 0; font-size: 24px; color: #1d1d1f; }
         .lang-indicator { margin-top: 8px; font-size: 14px; color: #86868b; background: #e8e8ed; padding: 4px 12px; border-radius: 12px; display: inline-block; }
         .controls-panel { margin-top: 10px; display: flex; justify-content: center; gap: 10px; }
         .lang-select { padding: 6px 10px; border-radius: 8px; border: 1px solid #d2d2d7; font-size: 14px; background: #fff; outline: none; }
-        .debug-toggle { font-size: 14px; color: #86868b; display: flex; align-items: center; gap: 5px; }
+        
+        .admin-link, .github-link { position: absolute; top: 20px; display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; text-decoration: none; font-size: 13px; font-weight: 600; z-index: 100; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+        .admin-link { left: 20px; background: rgba(0, 122, 255, 0.1); color: #007aff; display: none; }
+        .github-link { right: 20px; background: rgba(0, 0, 0, 0.05); color: #1d1d1f; }
 
-        .history-container {
-            width: 90%; max-width: 500px; flex-grow: 1; margin: 15px 0;
-            background: #fff; border-radius: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px;
-        }
-        .history-item {
-            display: flex; align-items: flex-start; gap: 10px; padding: 10px;
-            background: #f9f9f9; border-radius: 12px; border-left: 4px solid #007aff;
-            transition: background 0.3s;
-        }
+        .history-container { width: 90%; max-width: 500px; flex-grow: 1; margin: 15px 0; background: #fff; border-radius: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+        .history-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px; background: #f9f9f9; border-radius: 12px; border-left: 4px solid #007aff; transition: background 0.3s; }
         .history-item.played { border-left-color: #34c759; opacity: 0.7; }
         .history-checkbox { margin-top: 4px; transform: scale(1.2); accent-color: #007aff; }
         .history-content { flex-grow: 1; font-size: 15px; line-height: 1.4; word-break: break-word; }
         .original-text { color: #888; font-size: 12px; margin-bottom: 4px; }
         .translated-text { color: #1d1d1f; font-weight: 500; }
 
+        /* 打字机占位气泡 */
+        .streaming-box { border-left: 4px solid #ff9500; background: #fff8e1; display: none; }
+        .streaming-cursor { display: inline-block; width: 6px; height: 14px; background-color: #ff9500; animation: blink 1s step-end infinite; vertical-align: middle; margin-left: 4px;}
+        @keyframes blink { 50% { opacity: 0; } }
+
         .interaction-area { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; width: 100%; padding-bottom: 5vh; background: #f5f5f7; z-index: 10;}
         .action-bar { display: flex; gap: 10px; margin-bottom: 15px; width: 90%; max-width: 500px; justify-content: space-between; }
-        .action-btn {
-            flex: 1; padding: 12px 0; font-size: 14px; font-weight: 600; color: #fff;
-            border: none; border-radius: 12px; display: flex; align-items: center; justify-content: center; gap: 4px;
-        }
+        .action-btn { flex: 1; padding: 12px 0; font-size: 14px; font-weight: 600; color: #fff; border: none; border-radius: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px;}
         .btn-play { background-color: #34c759; box-shadow: 0 4px 10px rgba(52, 199, 89, 0.3); }
-        .btn-play:active { background-color: #2eb050; }
         .btn-export { background-color: #5856d6; box-shadow: 0 4px 10px rgba(88, 86, 214, 0.3); }
-        .btn-export:active { background-color: #4b49b8; }
         .btn-clear { background-color: #ff3b30; box-shadow: 0 4px 10px rgba(255, 59, 48, 0.3); }
-        .btn-clear:active { background-color: #c92a20; }
 
-        .record-btn {
-            width: 140px; height: 140px; border-radius: 50%;
-            background: linear-gradient(135deg, #007aff, #005bb5);
-            color: white; font-size: 20px; font-weight: bold; border: none;
-            box-shadow: 0 10px 20px rgba(0, 122, 255, 0.4); transition: all 0.2s ease;
-            user-select: none; -webkit-user-select: none;
-        }
-        .record-btn:active, .record-btn.recording { transform: scale(0.95); background: linear-gradient(135deg, #ff3b30, #c92a20); box-shadow: 0 5px 15px rgba(255, 59, 48, 0.4); }
+        /* VAD 交互核心按钮 */
+        .vad-toggle-btn { width: 140px; height: 140px; border-radius: 50%; background: linear-gradient(135deg, #e5e5ea, #d1d1d6); color: #666; font-size: 20px; font-weight: bold; border: none; box-shadow: 0 10px 20px rgba(0,0,0,0.1); transition: all 0.3s ease; user-select: none; }
+        .vad-toggle-btn.active { background: linear-gradient(135deg, #007aff, #005bb5); color: white; box-shadow: 0 10px 30px rgba(0, 122, 255, 0.4); animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 122, 255, 0.4); } 70% { box-shadow: 0 0 0 20px rgba(0, 122, 255, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 122, 255, 0); } }
+        
         .status-text { font-size: 16px; font-weight: 500; margin-top: 15px; height: 20px; color: #666;}
-
-        #latency-dashboard {
-            position: fixed; top: 10%; width: 90%; max-height: 40vh; overflow-y: auto; z-index: 100;
-            background: rgba(0,0,0,0.8); color: #0f0; padding: 15px; border-radius: 12px;
-            font-size: 12px; font-family: monospace; line-height: 1.5; text-align: left; display: none;
-        }
+        
+        /* 能量条探针 */
+        .vad-level-bar { width: 100px; height: 4px; background: #ddd; border-radius: 2px; margin-top: 10px; overflow: hidden; display: none; }
+        .vad-level-fill { height: 100%; width: 0%; background: #34c759; transition: width 0.1s; }
     </style>
 </head>
 <body>
-    <a href="/admin" target="_blank" id="adminLink" class="admin-link" title="系统管控中心">
-        ⚙️ Admin Panel
-    </a>
+    <a href="/admin" target="_blank" id="adminLink" class="admin-link" title="系统管控中心">⚙️ Admin</a>
     <a href="https://github.com/linxuhao/linxuhao-translator" target="_blank" class="github-link" title="View Source on GitHub">
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
-        </svg>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
         GitHub
     </a>
 
@@ -110,7 +62,7 @@
         <h1>🗣️ 随身翻译官</h1>
         <div class="lang-indicator" id="lang-display">环境语种: 待检测</div>
         <div class="controls-panel">
-            <select class="lang-select" id="nativeLang">
+                        <select class="lang-select" id="nativeLang">
                 <option value="zh">中文 (zh)</option>
                 <option value="en">English (en)</option>
                 <option value="yue">粤语 (yue)</option>
@@ -142,12 +94,17 @@
                 <option value="mk">Македонски (mk)</option>
                 <option value="ro">Română (ro)</option>
             </select>
-            <label class="debug-toggle"><input type="checkbox" id="debugCheckbox"> Debug</label>
         </div>
     </div>
 
     <div class="history-container" id="historyList">
+        <div class="history-item streaming-box" id="streamingBox">
+            <div class="history-content">
+                <div class="original-text" id="streamOriginal">听写中...</div>
+                <div class="translated-text"><span id="streamTranslated"></span><span class="streaming-cursor"></span></div>
+            </div>
         </div>
+    </div>
 
     <div class="interaction-area">
         <div class="action-bar">
@@ -156,46 +113,58 @@
             <button class="action-btn btn-clear" id="clearBtn">🗑️ 清空</button>
         </div>
         
-        <button class="record-btn" id="recordBtn">按住说话</button>
-        <div class="status-text" id="statusText">系统已就绪</div>
+        <button class="vad-toggle-btn" id="vadToggleBtn">点击开启同传</button>
+        <div class="status-text" id="statusText">系统已休眠</div>
+        <div class="vad-level-bar" id="vadLevelBar"><div class="vad-level-fill" id="vadLevelFill"></div></div>
     </div>
 
-    <div id="latency-dashboard">监控探针...</div>
-
     <script>
-        let mediaRecorder;
-        let audioChunks = [];
-        let currentForeignLang = "fr"; 
-        
+        // --- 核心状态 ---
         let translationQueue = []; 
-
-        const recordBtn = document.getElementById('recordBtn');
-        const statusText = document.getElementById('statusText');
-        const playSelectedBtn = document.getElementById('playSelectedBtn');
-        const exportBtn = document.getElementById('exportBtn');
-        const clearBtn = document.getElementById('clearBtn');
-        const dashboard = document.getElementById('latency-dashboard');
-        const langDisplay = document.getElementById('lang-display');
-        const nativeLangSelect = document.getElementById('nativeLang');
-        const debugCheckbox = document.getElementById('debugCheckbox');
-        const historyList = document.getElementById('historyList');
-
+        let currentForeignLang = "en"; // 默认外语为 en，防止与 zh 撞车
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-        function syncHistoryToStorage() {
-            localStorage.setItem('ttsQueueHistory', JSON.stringify(translationQueue));
-        }
+        // --- VAD 与流媒体配置 ---
+        let audioContext, analyser, microphone, mediaRecorder;
+        let isVadActive = false;
+        let isRecordingChunk = false;
+        let audioChunks = [];
+        let silenceStartTime = 0;
+        let recordStartTime = 0;
+        let animationFrameId;
+
+        const VAD_THRESHOLD = 0.02;     
+        const SILENCE_LIMIT = 800;      
+        const MAX_RECORD_LIMIT = 3000;  
+
+        // --- DOM 节点 ---
+        const nativeLangSelect = document.getElementById('nativeLang');
+        const historyList = document.getElementById('historyList');
+        const streamingBox = document.getElementById('streamingBox');
+        const streamOriginal = document.getElementById('streamOriginal');
+        const streamTranslated = document.getElementById('streamTranslated');
+        const vadToggleBtn = document.getElementById('vadToggleBtn');
+        const statusText = document.getElementById('statusText');
+        const vadLevelBar = document.getElementById('vadLevelBar');
+        const vadLevelFill = document.getElementById('vadLevelFill');
+        const langDisplay = document.getElementById('lang-display');
+
+        // --- 持久化与鉴权 ---
+        function syncHistoryToStorage() { localStorage.setItem('ttsQueueHistory', JSON.stringify(translationQueue)); }
 
         function initStorageData() {
             const savedLang = localStorage.getItem('nativeLangPref');
-            if (savedLang) {
-                nativeLangSelect.value = savedLang;
-            } else {
+            if (savedLang) nativeLangSelect.value = savedLang;
+            else {
                 const sysLangCode = (navigator.language || navigator.userLanguage || "zh").split('-')[0].toLowerCase();
-                const options = Array.from(nativeLangSelect.options);
-                const match = options.find(opt => opt.value === sysLangCode);
+                const match = Array.from(nativeLangSelect.options).find(opt => opt.value === sysLangCode);
                 nativeLangSelect.value = match ? sysLangCode : "zh";
                 localStorage.setItem('nativeLangPref', nativeLangSelect.value);
+            }
+
+            // 防撞车：确保外语不是母语
+            if (nativeLangSelect.value === currentForeignLang) {
+                currentForeignLang = nativeLangSelect.value === "zh" ? "en" : "zh";
             }
 
             const savedHistory = localStorage.getItem('ttsQueueHistory');
@@ -204,249 +173,307 @@
                     translationQueue = JSON.parse(savedHistory);
                     translationQueue.forEach(item => item.checked = false); 
                     renderHistory();
-                } catch (e) {
-                    console.error("历史记录解析失败:", e);
-                    translationQueue = [];
-                }
+                } catch (e) { translationQueue = []; }
             }
         }
         
-        initStorageData();
         async function checkAdminStatus() {
             try {
                 const res = await fetch('/api/me');
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.role === 'admin') {
-                        document.getElementById('adminLink').style.display = 'flex'; // 🎯 Admin 确认，解除隐藏
-                    }
-                }
-            } catch (e) { console.error("Auth check failed", e); }
+                if (res.ok && (await res.json()).role === 'admin') document.getElementById('adminLink').style.display = 'flex';
+            } catch (e) {}
         }
         
-        nativeLangSelect.addEventListener('change', (e) => {
-            localStorage.setItem('nativeLangPref', e.target.value);
-        });
-
-        debugCheckbox.addEventListener('change', (e) => {
-            dashboard.style.display = e.target.checked ? 'block' : 'none';
-        });
-
+        nativeLangSelect.addEventListener('change', (e) => localStorage.setItem('nativeLangPref', e.target.value));
         if ('speechSynthesis' in window) speechSynthesis.getVoices();
 
+        // --- UI 渲染核心 (修复复选框与列表丢失问题) ---
         function renderHistory() {
-            historyList.innerHTML = '';
+            // 清空列表，但保留打字机气泡
+            Array.from(historyList.children).forEach(child => { 
+                if(child.id !== 'streamingBox') child.remove(); 
+            });
+            
             translationQueue.forEach((item, index) => {
                 const div = document.createElement('div');
                 div.className = `history-item ${item.played ? 'played' : ''}`;
                 
                 const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.className = 'history-checkbox';
+                checkbox.type = 'checkbox'; 
+                checkbox.className = 'history-checkbox'; 
                 checkbox.checked = item.checked;
-                checkbox.addEventListener('change', (e) => {
-                    translationQueue[index].checked = e.target.checked;
-                    syncHistoryToStorage();
+                checkbox.addEventListener('change', (e) => { 
+                    translationQueue[index].checked = e.target.checked; 
+                    syncHistoryToStorage(); 
                 });
 
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'history-content';
-                contentDiv.innerHTML = `
-                    <div class="original-text">${item.sourceLang.toUpperCase()}: ${item.original || "..."}</div>
-                    <div class="translated-text">${item.targetLang.toUpperCase()}: ${item.translated}</div>
-                `;
+                contentDiv.innerHTML = `<div class="original-text">${item.sourceLang.toUpperCase()}: ${item.original || "..."}</div><div class="translated-text">${item.targetLang.toUpperCase()}: ${item.translated}</div>`;
 
-                div.appendChild(checkbox);
+                div.appendChild(checkbox); 
                 div.appendChild(contentDiv);
-                historyList.appendChild(div);
+                historyList.insertBefore(div, streamingBox); // 确保追加在打字机上方
             });
             historyList.scrollTop = historyList.scrollHeight;
         }
 
+        // --- TTS 播放引擎与基础交互 ---
         async function playCheckedItems() {
             if (!('speechSynthesis' in window)) return;
             window.speechSynthesis.cancel(); 
-
             const itemsToPlay = translationQueue.filter(item => item.checked);
             if (itemsToPlay.length === 0) return;
 
             statusText.innerText = "🔊 正在播报...";
-            
+            vadLevelBar.style.display = 'none'; 
+
+            // 🎯 提前获取系统所有物理语音包
+            const voices = window.speechSynthesis.getVoices();
+
             for (let i = 0; i < itemsToPlay.length; i++) {
                 const item = itemsToPlay[i];
-                const langMap = { "zh": "zh-CN", "fr": "fr-FR", "en": "en-US", "es": "es-ES", "ja": "ja-JP", "ko": "ko-KR", "de": "de-DE", "ru": "ru-RU", "it": "it-IT", "pt": "pt-BR" };
-                const systemLang = langMap[item.targetLang] || item.targetLang;
-
+                const langMap = { "zh": "zh-CN", "fr": "fr-FR", "en": "en-US", "es": "es-ES", "ja": "ja-JP" };
+                const targetSystemLang = langMap[item.targetLang] || item.targetLang;
+                
                 const utterance = new SpeechSynthesisUtterance(item.translated);
-                utterance.lang = systemLang;
-                utterance.rate = 1.0;
+                utterance.lang = targetSystemLang;
 
-                utterance.onend = () => {
-                    item.checked = false; 
-                    item.played = true;   
-                    renderHistory();      
-                    syncHistoryToStorage();
-                    
-                    if (i === itemsToPlay.length - 1) {
-                        statusText.innerText = "按住继续说话"; 
+                // 🎯 核心修复：专为 iOS 打造的 Voice 强制映射逻辑
+                if (voices.length > 0) {
+                    // 1. 尝试精确匹配 (如 fr-FR 匹配 fr-FR 或 fr_FR)
+                    let matchedVoice = voices.find(v => v.lang.replace('_', '-') === targetSystemLang);
+                    // 2. 如果没有精确匹配，尝试宽泛匹配 (如只匹配 fr)
+                    if (!matchedVoice) {
+                        const baseLang = targetSystemLang.split('-')[0];
+                        matchedVoice = voices.find(v => v.lang.startsWith(baseLang));
                     }
-                };
+                    // 3. 强行挂载物理发音人
+                    if (matchedVoice) {
+                        utterance.voice = matchedVoice;
+                    }
+                }
 
-                utterance.onerror = (e) => { 
-                    console.error("TTS Error:", e);
-                    if (i === itemsToPlay.length - 1) statusText.innerText = "按住继续说话"; 
-                };
-
-                window.speechSynthesis.speak(utterance);
+                await new Promise(resolve => {
+                    utterance.onend = () => {
+                        item.checked = false; item.played = true;   
+                        renderHistory(); syncHistoryToStorage();
+                        resolve();
+                    };
+                    utterance.onerror = resolve;
+                    window.speechSynthesis.speak(utterance);
+                });
+            }
+            
+            if (isVadActive) {
+                statusText.innerText = "👂 倾听中...";
+                vadLevelBar.style.display = 'block';
+            } else {
+                statusText.innerText = "系统已休眠";
             }
         }
-
-        playSelectedBtn.addEventListener('click', playCheckedItems);
-
-        exportBtn.addEventListener('click', () => {
-            if (translationQueue.length === 0) {
-                alert("当前无翻译记录可导出");
-                return;
+        
+        document.getElementById('playSelectedBtn').addEventListener('click', playCheckedItems);
+        
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            if (translationQueue.length === 0) return;
+            if (confirm("确认清空记录？")) { 
+                translationQueue = []; 
+                syncHistoryToStorage(); 
+                renderHistory(); 
             }
+        });
+
+        document.getElementById('exportBtn').addEventListener('click', () => {
+            if (translationQueue.length === 0) { alert("无记录可导出"); return; }
             let txtContent = "=== 随身翻译官 历史记录 ===\n\n";
             translationQueue.forEach((item, index) => {
-                txtContent += `[${index + 1}] 原文 (${item.sourceLang}): ${item.original || "未知"}\n`;
-                txtContent += `    翻译 (${item.targetLang}): ${item.translated}\n\n`;
+                txtContent += `[${index + 1}] 原文 (${item.sourceLang}): ${item.original}\n    翻译 (${item.targetLang}): ${item.translated}\n\n`;
             });
-
             const blob = new Blob([txtContent], { type: "text/plain;charset=utf-8" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
-            a.href = url;
-            a.download = `翻译记录_${new Date().toISOString().slice(0,10)}.txt`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            a.href = url; a.download = `翻译记录_${new Date().toISOString().slice(0,10)}.txt`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
         });
 
-        clearBtn.addEventListener('click', () => {
-            if (translationQueue.length === 0) return;
-            const confirmDelete = confirm("确认要清空所有翻译记录吗？此操作不可恢复。");
-            if (confirmDelete) {
-                translationQueue = [];
-                syncHistoryToStorage();
-                renderHistory();
-                statusText.innerText = "🧹 记录已清空";
-                setTimeout(() => {
-                    if (statusText.innerText === "🧹 记录已清空") statusText.innerText = "系统已就绪";
-                }, 2000);
+        // --- 核心: VAD 状态机 ---
+        async function toggleVAD() {
+            if (isVadActive) {
+                isVadActive = false; vadToggleBtn.classList.remove('active'); vadToggleBtn.innerText = "点击开启同传";
+                statusText.innerText = "系统已休眠"; vadLevelBar.style.display = 'none';
+                cancelAnimationFrame(animationFrameId);
+                if (isRecordingChunk) { mediaRecorder.stop(); isRecordingChunk = false; }
+                if (audioContext) audioContext.suspend();
+                return;
             }
-        });
 
-        async function initAudio() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // AEC 物理防御
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+                });
+                
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                analyser = audioContext.createAnalyser(); analyser.fftSize = 512;
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+
                 let options = { mimeType: 'audio/webm' };
                 if (!MediaRecorder.isTypeSupported('audio/webm')) options = { mimeType: 'audio/mp4' }; 
                 mediaRecorder = new MediaRecorder(stream, options);
-                mediaRecorder.ondataavailable = event => { if (event.data.size > 0) audioChunks.push(event.data); };
-                mediaRecorder.onstop = async () => {
-                    const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
-                    audioChunks = [];
-                    await sendAudioToServer(audioBlob);
+                
+                mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                    audioChunks = []; sendAudioChunkStream(blob);
                 };
-            } catch (err) {
-                statusText.innerText = `⚠️ 录音失败: ${err.name}`; statusText.style.color = "red";
+
+                isVadActive = true; vadToggleBtn.classList.add('active'); vadToggleBtn.innerText = "同传运行中";
+                statusText.innerText = "👂 倾听中..."; vadLevelBar.style.display = 'block';
+                detectAudioLoop();
+            } catch (err) { alert("麦克风权限被拒或设备异常"); }
+        }
+        vadToggleBtn.addEventListener('click', toggleVAD);
+
+        function detectAudioLoop() {
+            if (!isVadActive) return;
+            
+            // TTS 互斥防御
+            if (window.speechSynthesis && window.speechSynthesis.speaking) {
+                vadLevelFill.style.width = '0%';
+                if (isRecordingChunk) { mediaRecorder.stop(); isRecordingChunk = false; }
+                animationFrameId = requestAnimationFrame(detectAudioLoop);
+                return;
             }
+
+            const pcmData = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(pcmData);
+            let sumSquares = 0.0;
+            for (const amp of pcmData) sumSquares += amp * amp;
+            const rms = Math.sqrt(sumSquares / pcmData.length);
+            
+            vadLevelFill.style.width = Math.min(100, rms * 1000) + '%';
+            const now = Date.now();
+
+            if (rms > VAD_THRESHOLD) {
+                silenceStartTime = 0; 
+                if (!isRecordingChunk) {
+                    isRecordingChunk = true; recordStartTime = now;
+                    mediaRecorder.start(); statusText.innerText = "🎙️ 捕获中...";
+                }
+            } else {
+                if (isRecordingChunk) {
+                    if (silenceStartTime === 0) silenceStartTime = now;
+                    if (now - silenceStartTime > SILENCE_LIMIT) {
+                        isRecordingChunk = false; mediaRecorder.stop(); statusText.innerText = "👂 倾听中...";
+                    }
+                }
+            }
+            if (isRecordingChunk && (now - recordStartTime > MAX_RECORD_LIMIT)) {
+                isRecordingChunk = false; mediaRecorder.stop(); silenceStartTime = 0;
+            }
+            animationFrameId = requestAnimationFrame(detectAudioLoop);
         }
 
-        async function sendAudioToServer(audioBlob) {
-            statusText.innerText = "⏳ 算力矩阵处理中...";
+        // --- 核心: SSE 推流处理器 ---
+        async function sendAudioChunkStream(audioBlob) {
             const formData = new FormData();
-            formData.append("audio_file", audioBlob, "recording.webm");
+            formData.append("audio_file", audioBlob, "chunk.webm");
             formData.append("native_lang", nativeLangSelect.value); 
             formData.append("last_foreign_lang", currentForeignLang);
-            formData.append("debug", debugCheckbox.checked);
-
-            const t_start = Date.now();
 
             try {
-                const response = await fetch("/api/voice", { method: "POST", body: formData });
-                const total_time = Date.now() - t_start;
+                const response = await fetch("/api/stream_voice", { method: "POST", body: formData });
+                if (!response.ok) return;
 
-                if (response.ok) {
-                    const data = await response.json();
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let streamItemData = { original: "", translated: "", sourceLang: "", targetLang: "" };
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
                     
-                    const newForeignLang = data.detected_foreign_lang;
-                    if (newForeignLang && newForeignLang !== nativeLangSelect.value) {
-                        currentForeignLang = newForeignLang;
-                    }
-                    langDisplay.innerText = `环境语种: 自动检测 (${currentForeignLang})`;
-
-                    const isSpokeNative = data.target_tts_lang !== nativeLangSelect.value;
-                    const actualSourceLang = isSpokeNative ? nativeLangSelect.value : data.detected_foreign_lang;
-
-                    const newItem = {
-                        original: data.original_text || "未知", 
-                        translated: data.text,
-                        sourceLang: actualSourceLang,
-                        targetLang: data.target_tts_lang,
-                        checked: isIOS ? true : false, 
-                        played: false
-                    };
+                    const chunkStr = decoder.decode(value, { stream: true });
+                    const events = chunkStr.split("\n\n");
                     
-                    translationQueue.push(newItem);
-                    syncHistoryToStorage();
-                    renderHistory();
+                    for (const ev of events) {
+                        if (ev.startsWith("data: ")) {
+                            try {
+                                const payload = JSON.parse(ev.slice(6));
+                                
+                                if (payload.event === "start") {
+                                    streamItemData.original = payload.original_text;
+                                    streamItemData.sourceLang = payload.source_lang;
+                                    streamItemData.targetLang = payload.target_lang;
+                                    
+                                    // 根据后端的最新探针更新环境语种
+                                    if (payload.detected_foreign_lang && payload.detected_foreign_lang !== nativeLangSelect.value) {
+                                        currentForeignLang = payload.detected_foreign_lang;
+                                        langDisplay.innerText = `环境语种: 自动检测 (${currentForeignLang})`;
+                                    }
+                                    
+                                    streamOriginal.innerText = payload.original_text;
+                                    streamTranslated.innerText = "";
+                                    streamingBox.style.display = "flex";
+                                    historyList.scrollTop = historyList.scrollHeight;
+                                } 
+                                else if (payload.event === "token") {
+                                    streamTranslated.innerText += payload.text;
+                                    streamItemData.translated += payload.text;
+                                    historyList.scrollTop = historyList.scrollHeight;
+                                }
+                                else if (payload.event === "end") {
+                                    streamingBox.style.display = "none";
+                                    if (payload.reason === "empty_audio") return; 
+                                    
+                                    const newItem = {
+                                        original: streamItemData.original, translated: streamItemData.translated,
+                                        sourceLang: streamItemData.sourceLang, targetLang: payload.target_lang,
+                                        checked: isIOS ? true : false, played: false
+                                    };
+                                    translationQueue.push(newItem);
+                                    syncHistoryToStorage();
+                                    renderHistory();
 
-                    if (data.logs) {
-                        dashboard.innerHTML = `总耗时: ${total_time}ms<br>ASR: ${data.metrics.asr_ms}ms | LLM: ${data.metrics.llm_ms}ms<br>` + 
-                                              `<div style="border-top:1px solid #333;margin-top:5px;padding-top:5px;">${data.logs.join('<br>')}</div>`;
-                    }
+                                    // Android/PC 即时连播
+                                    if (!isIOS && 'speechSynthesis' in window) {
+                                        const utterance = new SpeechSynthesisUtterance(streamItemData.translated);
+                                        utterance.lang = payload.target_lang === 'zh' ? 'zh-CN' : payload.target_lang;
+                                        
+                                        // 播报开始：锁定状态UI
+                                        utterance.onstart = () => {
+                                            statusText.innerText = "🔊 正在播报...";
+                                            vadLevelBar.style.display = 'none';
+                                        };
 
-                    if (isIOS) {
-                        statusText.innerText = "✅ 翻译完成，请点击播放";
-                    } else {
-                        statusText.innerText = "✅ 翻译完成";
-                        if ('speechSynthesis' in window) {
-                            const utterance = new SpeechSynthesisUtterance(data.text);
-                            utterance.lang = data.target_tts_lang === 'zh' ? 'zh-CN' : data.target_tts_lang;
-                            utterance.onend = () => { 
-                                newItem.played = true; 
-                                renderHistory(); 
-                                syncHistoryToStorage();
-                            };
-                            window.speechSynthesis.speak(utterance);
+                                        // 播报结束：释放状态UI
+                                        utterance.onend = () => { 
+                                            newItem.played = true; 
+                                            renderHistory(); 
+                                            syncHistoryToStorage(); 
+                                            if (isVadActive) {
+                                                statusText.innerText = "👂 倾听中...";
+                                                vadLevelBar.style.display = 'block';
+                                            } else {
+                                                statusText.innerText = "系统已休眠";
+                                            }
+                                        };
+                                        window.speechSynthesis.speak(utterance);
+                                    }
+                                }
+                            } catch (err) {}
                         }
                     }
-                } else {
-                    statusText.innerText = "❌ 翻译失败";
                 }
-            } catch (error) {
-                console.error(error); statusText.innerText = "❌ 网络异常";
-            }
+            } catch (error) { console.error("Stream exception:", error); }
         }
 
-        const startRecording = (e) => {
-            e.preventDefault();
-            if (!mediaRecorder) return;
-            recordBtn.classList.add('recording'); recordBtn.innerText = "松开发送";
-            statusText.innerText = "🎙️ 正在录音...";
-            audioChunks = []; mediaRecorder.start();
-        };
-
-        const stopRecording = (e) => {
-            e.preventDefault();
-            if (!mediaRecorder || mediaRecorder.state === "inactive") return;
-            recordBtn.classList.remove('recording'); recordBtn.innerText = "按住说话";
-            mediaRecorder.stop();
-        };
-
-        recordBtn.addEventListener('touchstart', startRecording, { passive: false });
-        recordBtn.addEventListener('touchend', stopRecording);
-        recordBtn.addEventListener('mousedown', startRecording);
-        recordBtn.addEventListener('mouseup', stopRecording);
-        recordBtn.addEventListener('mouseleave', stopRecording);
-
-        window.onload = () => {
-            initAudio();
-            checkAdminStatus(); // 触发身份探针
+        // 初始化
+        window.onload = () => { 
+            initStorageData(); 
+            checkAdminStatus(); 
         };
     </script>
 </body>
