@@ -74,6 +74,7 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
     audio_bytes = payload["audio_bytes"]
     native_lang_base = payload["native_lang_base"]
     last_foreign_lang = payload["last_foreign_lang"]
+    chat_history_str = payload.get("chat_history", "[]") # 🎯 获取前端发来的上下文
 
     try:
         t_asr_start = time.time()
@@ -116,12 +117,36 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
             "detected_foreign_lang": detected_foreign_lang 
         })
 
-        system_prompt = f"将user的句子直接翻译为{target_lang_full_name}。\n如果翻译目标是同语言，那么按照输入可能是方言来翻译。\n翻译有礼貌且口语化一些。\n必须严格返回翻译结果，禁止输出其他任何字符"
+        system_prompt = f"""你是一个顶级的同声传译专家。请将用户的话翻译为{target_lang_full_name}。
+规则：
+1. 结合上下文语境，保持代词和术语的连贯性。
+2. 输入文本来自语音识别(ASR)，可能包含同音错别字、标点错误或语义断层。请务必根据上下文逻辑进行合理的自动纠错与润色后，再进行翻译。
+3. 翻译要地道、自然、口语化，切勿生硬直译乱码。
+4. 绝对禁止解释、对话或输出任何无关的标点符号。
+5. 仅输出针对最新一句话的最终翻译结果。"""
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # 🎯 解析并注入最近的 N 句历史记录
+        try:
+            history_data = json.loads(chat_history_str)
+            for h in history_data:
+                if h.get("original") and h.get("translated"):
+                    messages.append({"role": "user", "content": h["original"]})
+                    messages.append({"role": "assistant", "content": h["translated"]})
+        except Exception as e:
+            logger.warning(f"[{req_id}] ⚠️ 历史记录解析失败: {e}")
+
+        # 🎯 压入当前需要翻译的新句子
+        messages.append({"role": "user", "content": asr_text})
+
         brain_payload = {
             "model": "qwen3",
-            "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": asr_text}],
-            "stream": True, "temperature": 0.5, "max_tokens": 256
+            "messages": messages,
+            "stream": True, 
+            "temperature": 0.2,
+            "max_tokens": 256
         }
+
         t_llm_start = time.time()
         full_trans_text = ""
         async with client.stream("POST", BRAIN_URL, json=brain_payload) as r:
@@ -210,8 +235,11 @@ async def set_user_vip(username: str = Form(...), is_vip: str = Form(...), admin
 # ==========================================
 @app.post("/api/stream_voice")
 async def stream_voice(
-    audio_file: UploadFile = File(...), native_lang: str = Form("zh"), 
-    last_foreign_lang: str = Form("fr"), cf_user: str = Header(None, alias="Cf-Access-Authenticated-User-Email")
+    audio_file: UploadFile = File(...), 
+    native_lang: str = Form("zh"), 
+    last_foreign_lang: str = Form("fr"), 
+    chat_history: str = Form("[]"), # 🎯 新增前端传来的历史记忆
+    cf_user: str = Header(None, alias="Cf-Access-Authenticated-User-Email")
 ):
     req_id = f"REQ-{int(time.time()*1000)}"
     record_usage(cf_user)
@@ -220,11 +248,12 @@ async def stream_voice(
     payload = {
         "req_id": req_id, "audio_bytes": await audio_file.read(),
         "filename": audio_file.filename, "content_type": audio_file.content_type,
-        "native_lang_base": native_lang.split('-')[0].lower(), "last_foreign_lang": last_foreign_lang,
+        "native_lang_base": native_lang.split('-')[0].lower(), 
+        "last_foreign_lang": last_foreign_lang,
+        "chat_history": chat_history # 🎯 透传给流水线
     }
     
     chunk_queue = asyncio.Queue()
-    # 🎯 投递格式已剥离冗余的 "STREAM" 标记
     await task_queue.put((priority, time.time(), chunk_queue, payload))
     
     async def event_generator():

@@ -142,21 +142,20 @@
     <script>
         // --- 核心状态 ---
         let translationQueue = []; 
-        let currentForeignLang = "en"; // 默认外语为 en，防止与 zh 撞车
+        let currentForeignLang = "fr"; // 默认外语为 en，防止与 zh 撞车
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-        // --- VAD 与流媒体配置 ---
+// --- VAD 与流媒体配置 ---
         let audioContext, analyser, microphone, mediaRecorder;
-        let isVadActive = false;
-        let isRecordingChunk = false;
-        let audioChunks = [];
-        let silenceStartTime = 0;
-        let recordStartTime = 0;
-        let animationFrameId;
+        let isVadActive = false, isRecordingChunk = false;
+        let audioChunks = [], silenceStartTime = 0, recordStartTime = 0, animationFrameId;
 
         const VAD_THRESHOLD = 0.02;     
-        const SILENCE_LIMIT = 800;      
-        const MAX_RECORD_LIMIT = 3000;  
+        // 🎯 黄金参数矩阵
+        const SILENCE_NORMAL = 1200;    // 阶段1：思考期静音容忍 (1.2秒)
+        const SILENCE_EAGER = 600;      // 阶段2：长句 Eager Cut 容忍 (0.7秒)
+        const EAGER_TRIGGER_TIME = 3000;// 触发阶段2的录音时长阈值 (3秒)
+        const MAX_RECORD_LIMIT = 10000; // 绝对硬切片界限 (10秒)
 
         // --- DOM 节点 ---
         const nativeLangSelect = document.getElementById('nativeLang');
@@ -360,13 +359,8 @@
         function detectAudioLoop() {
             if (!isVadActive) return;
             
-            // TTS 互斥防御
-            if (window.speechSynthesis && window.speechSynthesis.speaking) {
-                vadLevelFill.style.width = '0%';
-                if (isRecordingChunk) { mediaRecorder.stop(); isRecordingChunk = false; }
-                animationFrameId = requestAnimationFrame(detectAudioLoop);
-                return;
-            }
+            // 🎯 架构升级：彻底移除 TTS window.speechSynthesis.speaking 软件锁
+            // 完全信任设备的硬件 AEC (回声消除) 模块，释放全双工能力！
 
             const pcmData = new Float32Array(analyser.fftSize);
             analyser.getFloatTimeDomainData(pcmData);
@@ -376,6 +370,12 @@
             
             vadLevelFill.style.width = Math.min(100, rms * 1000) + '%';
             const now = Date.now();
+            
+            // 🎯 动态计算当前静音阈值 (Sliding Window)
+            let currentSilenceLimit = SILENCE_NORMAL;
+            if (isRecordingChunk && (now - recordStartTime > EAGER_TRIGGER_TIME)) {
+                currentSilenceLimit = SILENCE_EAGER; // 超过 3 秒，切片策略变得更具侵略性
+            }
 
             if (rms > VAD_THRESHOLD) {
                 silenceStartTime = 0; 
@@ -386,23 +386,35 @@
             } else {
                 if (isRecordingChunk) {
                     if (silenceStartTime === 0) silenceStartTime = now;
-                    if (now - silenceStartTime > SILENCE_LIMIT) {
+                    // 🎯 应用动态静音阈值
+                    if (now - silenceStartTime > currentSilenceLimit) {
                         isRecordingChunk = false; mediaRecorder.stop(); statusText.innerText = "👂 倾听中...";
                     }
                 }
             }
+            
+            // 🎯 10 秒绝对护城河
             if (isRecordingChunk && (now - recordStartTime > MAX_RECORD_LIMIT)) {
                 isRecordingChunk = false; mediaRecorder.stop(); silenceStartTime = 0;
             }
+            
             animationFrameId = requestAnimationFrame(detectAudioLoop);
         }
 
         // --- 核心: SSE 推流处理器 ---
-        async function sendAudioChunkStream(audioBlob) {
+async function sendAudioChunkStream(audioBlob) {
             const formData = new FormData();
             formData.append("audio_file", audioBlob, "chunk.webm");
             formData.append("native_lang", nativeLangSelect.value); 
             formData.append("last_foreign_lang", currentForeignLang);
+
+            // 🎯 提取最近 3 句有效的历史记录作为上下文滑动窗口
+            // 避免发送过多导致 LLM 记忆过载或 Token 超标
+            const recentHistory = translationQueue.slice(-3).map(item => ({
+                original: item.original,
+                translated: item.translated
+            }));
+            formData.append("chat_history", JSON.stringify(recentHistory));
 
             try {
                 const response = await fetch("/api/stream_voice", { method: "POST", body: formData });
