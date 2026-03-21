@@ -1,6 +1,6 @@
 # ==========================================
 # 文件名: qwen3-asr/Dockerfile
-# 架构定位: 纯净 ROCm 环境 + Gunicorn 多进程并发引擎
+# 架构定位: 纯净 ROCm 环境 + vllm 多进程并发引擎
 # ==========================================
 FROM  vllm/vllm-openai-rocm:latest
 
