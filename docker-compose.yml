@@ -52,7 +52,7 @@ services:
       --dtype float16
       --max-model-len 32768
       --gpu-memory-utilization 0.95
-      --max-num-seqs 32
+      --max-num-seqs 64
       --served-model-name qwen3
       --trust-remote-code
     restart: unless-stopped
@@ -86,7 +86,7 @@ services:
       --dtype float16
       --max-model-len 8192
       --gpu-memory-utilization 0.85
-      --max-num-seqs 32
+      --max-num-seqs 64
       --served-model-name qwen3-asr
       --trust-remote-code
     restart: unless-stopped
