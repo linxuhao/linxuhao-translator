@@ -18,12 +18,6 @@ services:
     build:
       context: ./gateway
     container_name: api_gateway
-    deploy:
-      resources:
-        limits:
-          # 防止网关吃掉太多 CPU
-          cpus: '2'
-          memory: 512M
     ports:
       - "5000:5000"
     volumes:
@@ -38,7 +32,6 @@ services:
     container_name: vllm_qwen
     ports:
       - "8000:8000"
-    ipc: host
     devices:
       - "/dev/kfd:/dev/kfd"
       - "/dev/dri:/dev/dri"
@@ -70,17 +63,30 @@ services:
 # ==========================================
   qwen3-asr:
     build:
-      context: ./qwen3-asr
+        context: ./qwen3-asr
     container_name: qwen3_asr
     ports:
       - "9000:8000"
     devices:
       - "/dev/kfd:/dev/kfd"
       - "/dev/dri:/dev/dri"
+    group_add:
+      - video
+      - render
     environment:
-      - HIP_VISIBLE_DEVICES=1 # 物理隔离至 7800 XT
-      - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+      - HIP_VISIBLE_DEVICES=1
+      - VLLM_USE_TRITON_AWQ=1
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
     volumes:
-      - ./qwen3-asr/app:/app
-      - ~/.cache/huggingface:/root/.cache/huggingface # 缓存模型，避免重复下载
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    entrypoint: []
+    # 【关键修复 2】：手动指定 bash 执行环境
+    command: >
+      vllm serve Qwen/Qwen3-ASR-1.7B     
+      --dtype float16
+      --max-model-len 8192
+      --gpu-memory-utilization 0.85
+      --max-num-seqs 32
+      --served-model-name qwen3-asr
+      --trust-remote-code
     restart: unless-stopped
