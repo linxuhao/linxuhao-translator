@@ -317,17 +317,63 @@
             document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
         });
 
-        // --- 核心: VAD 状态机 ---
+        // --- 1. 物理层: 屏幕常亮保活引擎全局状态 ---
+        let wakeLock = null;
+
+        async function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('✅ 屏幕常亮物理锁已激活');
+                    wakeLock.addEventListener('release', () => {
+                        console.log('⚠️ 屏幕常亮已被系统底层释放');
+                    });
+                } catch (err) {
+                    console.error(`❌ 屏幕常亮请求被系统拒绝: ${err.name}, ${err.message}`);
+                }
+            } else {
+                console.warn('⚠️ 当前浏览器不支持 Wake Lock API');
+            }
+        }
+
+        function releaseWakeLock() {
+            if (wakeLock !== null) {
+                wakeLock.release().then(() => {
+                    wakeLock = null;
+                    console.log('💤 屏幕常亮物理锁已手动解除');
+                });
+            }
+        }
+
+        // 🛡️ 终极防御: 监听系统切后台导致的强制释放
+        // 如果 VAD 仍在运行（isVadActive 为 true），且用户切回页面，则自动重建物理锁
+        document.addEventListener('visibilitychange', async () => {
+            if (isVadActive && wakeLock === null && document.visibilityState === 'visible') {
+                console.log('🔄 检测到页面切回且同传运行中，正在重建常亮锁...');
+                await requestWakeLock();
+            }
+        });
+
+        // --- 2. 核心: VAD 状态机 ---
         async function toggleVAD() {
+            // [状态机：关闭同传]
             if (isVadActive) {
-                isVadActive = false; vadToggleBtn.classList.remove('active'); vadToggleBtn.innerText = "点击开启同传";
-                statusText.innerText = "系统已休眠"; vadLevelBar.style.display = 'none';
+                isVadActive = false; 
+                vadToggleBtn.classList.remove('active'); 
+                vadToggleBtn.innerText = "点击开启同传";
+                statusText.innerText = "系统已休眠"; 
+                vadLevelBar.style.display = 'none';
                 cancelAnimationFrame(animationFrameId);
+                
                 if (isRecordingChunk) { mediaRecorder.stop(); isRecordingChunk = false; }
                 if (audioContext) audioContext.suspend();
+                
+                // 🎯 注入点：释放物理锁，允许屏幕自然休眠
+                releaseWakeLock();
                 return;
             }
 
+            // [状态机：开启同传]
             try {
                 // AEC 物理防御
                 const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -349,10 +395,19 @@
                     audioChunks = []; sendAudioChunkStream(blob);
                 };
 
-                isVadActive = true; vadToggleBtn.classList.add('active'); vadToggleBtn.innerText = "同传运行中";
-                statusText.innerText = "👂 倾听中..."; vadLevelBar.style.display = 'block';
+                isVadActive = true; 
+                vadToggleBtn.classList.add('active'); 
+                vadToggleBtn.innerText = "同传运行中";
+                statusText.innerText = "👂 倾听中..."; 
+                vadLevelBar.style.display = 'block';
+                
+                // 🎯 注入点：在获取麦克风权限后，立即申请屏幕常亮物理锁
+                await requestWakeLock();
+                
                 detectAudioLoop();
-            } catch (err) { alert("麦克风权限被拒或设备异常"); }
+            } catch (err) { 
+                alert("麦克风权限被拒或设备异常"); 
+            }
         }
         vadToggleBtn.addEventListener('click', toggleVAD);
 
@@ -402,7 +457,7 @@
         }
 
         // --- 核心: SSE 推流处理器 ---
-async function sendAudioChunkStream(audioBlob) {
+        async function sendAudioChunkStream(audioBlob) {
             const formData = new FormData();
             formData.append("audio_file", audioBlob, "chunk.webm");
             formData.append("native_lang", nativeLangSelect.value); 
