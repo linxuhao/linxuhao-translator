@@ -31,8 +31,8 @@
             background: #e8e8ed; color: #1d1d1f; outline: none; appearance: none; text-align: center;
         }
         .native-toggle-btn {
-            padding: 6px 12px; border-radius: 20px; border: 1px solid #d2d2d7;
-            font-size: 12px; font-weight: 600; background: #fff; color: #86868b;
+            padding: 4px 10px; border-radius: 12px; border: 1px solid #d2d2d7;
+            font-size: 11px; font-weight: 600; background: #fff; color: #86868b;
             cursor: pointer; transition: all 0.2s; white-space: nowrap; outline: none;
         }
         .native-toggle-btn.active {
@@ -112,8 +112,10 @@
             <h1 data-i18n="title">👨‍🏫 外教陪聊</h1>
             <div class="lang-indicator" data-i18n="detecting">沉浸式口语对练</div>
         </div>
-        <button id="allowNativeToggle" class="native-toggle-btn" data-i18n="btn_native_off">💡 母语辅助: 关</button>
-        <select class="lang-select" id="targetLang"></select>
+        <div style="display: flex; flex-direction: column; gap: 8px; align-items: flex-end;">
+            <select class="lang-select" id="targetLang"></select>
+            <button id="allowNativeToggle" class="native-toggle-btn" data-i18n="btn_native_off">💡 母语辅助: 关</button>
+        </div>
     </div>
 
     <div class="chat-container" id="chatList">
@@ -158,7 +160,7 @@
         // 🎯 核心状态：聊天记录数组 (结构: {user: "...", tutor: "..."})
         let tutorHistory = []; 
         const MAX_HISTORY_TURNS = 10; // 滑动窗口限制：物理防御显存溢出
-        
+
         let audioContext, analyser, microphone, mediaRecorder, currentStream = null;
         let isVadActive = false, isRecordingChunk = false;
         let audioChunks = [], silenceStartTime = 0, recordStartTime = 0, animationFrameId;
