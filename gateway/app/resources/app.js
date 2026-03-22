@@ -250,10 +250,25 @@ document.getElementById('playSelectedBtn').addEventListener('click', playChecked
 // --- 9. 工具按钮绑定 ---
 document.getElementById('clearBtn').addEventListener('click', () => {
     if (translationQueue.length === 0) return;
+    
     if (confirm("确认清空记录？")) { 
+        // 🎯 核心物理防御：瞬间斩断底层 TTS 播报队列与当前发声
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+        }
+        
         translationQueue = []; 
         syncHistoryToStorage(); 
         renderHistory(); 
+        
+        // 🎯 状态机急停重置：防止 UI 卡死在 "正在播报..." 状态
+        if (isVadActive) {
+            updateStatusUI("status_listen");
+            vadLevelBar.style.display = 'block';
+        } else {
+            updateStatusUI("status_sleep");
+            vadLevelBar.style.display = 'none';
+        }
     }
 });
 
