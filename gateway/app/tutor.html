@@ -30,7 +30,14 @@
             padding: 6px 12px; border-radius: 20px; border: none; font-size: 14px; font-weight: 600;
             background: #e8e8ed; color: #1d1d1f; outline: none; appearance: none; text-align: center;
         }
-
+        .native-toggle-btn {
+            padding: 6px 12px; border-radius: 20px; border: 1px solid #d2d2d7;
+            font-size: 12px; font-weight: 600; background: #fff; color: #86868b;
+            cursor: pointer; transition: all 0.2s; white-space: nowrap; outline: none;
+        }
+        .native-toggle-btn.active {
+            background: #e8f5e9; color: #34c759; border-color: #34c759;
+        }
         /* --- 聊天气泡流 (Chat UI) --- */
         .chat-container { 
             width: 100%; max-width: 600px; flex: 1; min-height: 0; 
@@ -105,12 +112,13 @@
             <h1 data-i18n="title">👨‍🏫 外教陪聊</h1>
             <div class="lang-indicator" data-i18n="detecting">沉浸式口语对练</div>
         </div>
+        <button id="allowNativeToggle" class="native-toggle-btn" data-i18n="btn_native_off">💡 母语辅助: 关</button>
         <select class="lang-select" id="targetLang"></select>
     </div>
 
     <div class="chat-container" id="chatList">
-        <div class="system-hint">对话已加密，历史记录仅保存在本地</div>
-        </div>
+        <div class="system-hint" data-i18n="hint_encrypted">对话已加密，历史记录仅保存在本地</div>
+    </div>
 
     <div class="action-island-wrapper">
         <div class="action-island">
@@ -144,7 +152,7 @@
             <span class="tab-label" data-i18n="tab_admin">设置</span>
         </a>
     </div>
-    <script src="/resources/i18n.js?v=1.0"></script>
+    <script src="/resources/i18n.js?v=1.1"></script>
     <script>
 
         // 🎯 核心状态：聊天记录数组 (结构: {user: "...", tutor: "..."})
@@ -162,13 +170,34 @@
         const MAX_RECORD_LIMIT = 10000; 
 
         const targetLangSelect = document.getElementById('targetLang');
-        const nativeLang = 'zh'
+        const allowNativeToggle = document.getElementById('allowNativeToggle');
+        let nativeLang = 'zh';
+        let isNativeAllowed = localStorage.getItem('tutorNativeAllowed') === 'true';
         const chatList = document.getElementById('chatList');
         const vadToggleBtn = document.getElementById('vadToggleBtn');
         const statusText = document.getElementById('statusText');
         const vadLevelBar = document.getElementById('vadLevelBar');
         const vadLevelFill = document.getElementById('vadLevelFill');
 
+        function updateNativeToggleUI() {
+            allowNativeToggle.classList.toggle('active', isNativeAllowed);
+            const statusKey = isNativeAllowed ? 'btn_native_on' : 'btn_native_off';
+            allowNativeToggle.setAttribute('data-i18n', statusKey);
+            
+            // 🎯 O(1) 物理直达更新，杜绝全局重绘浪费 CPU 算力
+            if (typeof I18N_DICT !== 'undefined') {
+                const currentLang = localStorage.getItem('nativeLangPref') || 'zh';
+                const dict = I18N_DICT[currentLang] || I18N_DICT["en"] || I18N_DICT["zh"];
+                if (dict[statusKey]) {
+                    allowNativeToggle.innerText = dict[statusKey];
+                }
+            }
+        }
+        allowNativeToggle.addEventListener('click', () => {
+            isNativeAllowed = !isNativeAllowed;
+            localStorage.setItem('tutorNativeAllowed', isNativeAllowed);
+            updateNativeToggleUI();
+        });
         // --- UI 初始化 ---
         function initTutorUI() {
             // Tutor 的学习语言下拉框 (不受 UI 语言影响)
@@ -180,6 +209,7 @@
             const nativeUI = localStorage.getItem('nativeLangPref') || 'zh';
             if (window.applyUILanguage) window.applyUILanguage(nativeUI);
             if (nativeUI) nativeLang = nativeUI;
+            updateNativeToggleUI(); // 🎯 页面加载时同步 UI 状态
             
             const savedHistory = localStorage.getItem('tutorQueueHistory');
             if (savedHistory) {
@@ -327,6 +357,7 @@
             formData.append("audio_file", audioBlob, "chunk.webm");
             formData.append("target_lang", targetLangSelect.value); 
             formData.append("native_lang", nativeLang); 
+            formData.append("allow_native", isNativeAllowed ? "true" : "false");
 
             // 🎯 物理截断：严格限制发送给后端的 Context Window
             const apiHistory = [];

@@ -44,6 +44,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
     audio_bytes = payload["audio_bytes"]
     target_lang = payload["target_lang"]
     native_lang = payload["native_lang"]
+    allow_native = payload["allow_native"]
     chat_history_str = payload.get("chat_history", "[]")
 
     try:
@@ -88,9 +89,14 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         # ----------------------------------------
         # Step 2: 组装外教 Stateful History
         # ----------------------------------------
+        if allow_native:
+            native_rule = f"用户是完全的初学者，你可以使用少量的{native_lang_full_name}进行辅助解释和鼓励，但核心对话仍需尽量保持在{target_lang_full_name}。"
+        else:
+            native_rule = f"你必须且只能使用{target_lang_full_name}回复，绝对严禁使用{native_lang_full_name}。"
+        logger.info(f"[allow_native {allow_native}]")
         system_prompt = f"""你是一位专业、耐心、幽默的{target_lang_full_name}外教。
 规则：
-1. 你的任务是与用户进行自然的口语对话练习，必须且只能使用{target_lang_full_name}回复。
+1. 你的任务是与用户进行自然的口语对话练习，{native_rule}。
 2. 每次回复要简短、口语化，像真人在聊天（控制在1-3句话内）。
 3. 输入文本来自语音识别(ASR)，可能包含同音错别字、标点错误或语义断层。请务必根据上下文逻辑进行合理的自动纠错与润色后，再进行回复
 4. 如果用户的表达有明显语法错误，可以在回复中自然地给出简短建议，然后继续话题
@@ -159,8 +165,9 @@ def start_tutor_workers():
 @router.post("/api/tutor/stream")
 async def stream_tutor(
     audio_file: UploadFile = File(...), 
-    target_lang: str = Form("zh"),
-    native_lang: str = Form("fr"), 
+    target_lang: str = Form("fr"),
+    native_lang: str = Form("zh"), 
+    allow_native: str = Form("false"),
     chat_history: str = Form("[]"),
     cf_user: str = Header(None, alias="Cf-Access-Authenticated-User-Email")
 ):
@@ -172,6 +179,7 @@ async def stream_tutor(
         "audio_bytes": await audio_file.read(),
         "target_lang": target_lang, 
         "native_lang": native_lang,
+        "allow_native": allow_native == "true",
         "chat_history": chat_history 
     }
     
