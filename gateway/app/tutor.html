@@ -260,7 +260,6 @@
                 .trim();
         }
 
-        // 🎯 3. 修改发音函数，应用过滤器
         function playLastTutorMessage() {
             if (!('speechSynthesis' in window)) return;
             window.speechSynthesis.cancel();
@@ -268,23 +267,38 @@
             const validTurns = tutorHistory.filter(t => t.tutor && t.tutor.length > 0);
             if (validTurns.length === 0) return;
             
-            // 取出最后一句并进行净化清洗
             const rawText = validTurns[validTurns.length - 1].tutor;
             const cleanText = sanitizeTextForTTS(rawText); 
             
-            if (cleanText.length === 0) return; // 如果清洗后全空(比如外教只发了个😊)，直接阻断播报
+            if (cleanText.length === 0) return; 
             
             const targetLangCode = targetLangSelect.value;
-            const utterance = new SpeechSynthesisUtterance(cleanText); // 🎯 传入净化后的文本
+            const utterance = new SpeechSynthesisUtterance(cleanText); 
             
             const langMap = { "zh": "zh-CN", "en": "en-US", "fr": "fr-FR", "ja": "ja-JP", "es": "es-ES" };
             utterance.lang = langMap[targetLangCode] || targetLangCode;
             
-            utterance.onstart = () => { statusText.innerText = "🔊 发音中..."; vadLevelBar.style.display = 'none'; };
-            utterance.onend = () => { 
-                if (isVadActive) { statusText.innerText = "👂 倾听中..."; vadLevelBar.style.display = 'block'; } 
-                else { statusText.innerText = "系统已休眠"; }
+            // 🎯 开始发音，切入保守阈值模式
+            utterance.onstart = () => { 
+                isTTSPlaying = true;
+                statusText.innerText = "🔊 发音中 (大声说话可打断)..."; 
+                vadLevelBar.style.display = 'none'; 
             };
+            
+            // 🎯 发音结束，恢复灵敏阈值模式
+            utterance.onend = () => { 
+                isTTSPlaying = false;
+                if (isVadActive) { 
+                    statusText.innerText = "👂 倾听中..."; 
+                    vadLevelBar.style.display = 'block'; 
+                } else { 
+                    statusText.innerText = "系统已休眠"; 
+                }
+            };
+            
+            // 🎯 防御性兜底：如果被打断或出错，也要重置状态
+            utterance.onerror = () => { isTTSPlaying = false; };
+            
             window.speechSynthesis.speak(utterance);
         }
 
@@ -332,24 +346,64 @@
         }
         vadToggleBtn.addEventListener('click', toggleVAD);
 
+        
+        // 🎯 档位 1: 平时倾听 (过滤背景闲聊)
+        // 0.02: 极度灵敏（连呼吸声都能触发）
+        // 0.03 - 0.04: 推荐值（能有效过滤两米外的旁人聊天声，但你能轻松触发）
+        const VAD_NORMAL_THRESHOLD = 0.035;  
+
+        // 🎯 档位 2: TTS 播放时 (防御尾音残影与强噪音)
+        // 0.06: 适中（能防住大部分回声，但防不住你刚说完的拖长尾音）
+        // 0.08 - 0.10: 推荐值（物理级装甲，必须你用正常偏大的音量、靠近麦克风明确说 "Wait/No" 才能击穿）
+        // 0.15: 绝对防御（需要你大吼才能打断）
+        const VAD_STRICT_THRESHOLD = 0.09;  
+        
+        let isTTSPlaying = false;
+
+        // 2. 🎯 重写 VAD 循环，应用动态阈值
         function detectAudioLoop() {
             if (!isVadActive) return;
             const pcmData = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(pcmData);
             let sumSquares = 0.0; for (const amp of pcmData) sumSquares += amp * amp;
             const rms = Math.sqrt(sumSquares / pcmData.length);
+            
             vadLevelFill.style.width = Math.min(100, rms * 1000) + '%';
             
             const now = Date.now();
             let currentSilenceLimit = (isRecordingChunk && (now - recordStartTime > EAGER_TRIGGER_TIME)) ? SILENCE_EAGER : SILENCE_NORMAL;
 
-            if (rms > VAD_THRESHOLD) {
+            // 🎯 核心逻辑：动态判断当前应该用哪个阈值
+            const activeThreshold = isTTSPlaying ? VAD_STRICT_THRESHOLD : VAD_NORMAL_THRESHOLD;
+
+            if (rms > activeThreshold) {
                 silenceStartTime = 0; 
-                if (!isRecordingChunk) { isRecordingChunk = true; recordStartTime = now; mediaRecorder.start(); statusText.innerText = "🎙️ 捕获中..."; }
+                if (!isRecordingChunk) { 
+                    
+                    // 💥 真实打断发生！如果 TTS 还在播，瞬间将其物理静音
+                    if (isTTSPlaying && 'speechSynthesis' in window) {
+                        window.speechSynthesis.cancel();
+                        isTTSPlaying = false; 
+                        console.log("🌊 用户用高音量击穿阈值，外教已被物理静音");
+                    }
+
+                    isRecordingChunk = true; 
+                    recordStartTime = now; 
+                    mediaRecorder.start(); 
+                    statusText.innerText = "🎙️ 捕获中..."; 
+                }
             } else if (isRecordingChunk) {
                 if (silenceStartTime === 0) silenceStartTime = now;
-                if (now - silenceStartTime > currentSilenceLimit) { isRecordingChunk = false; mediaRecorder.stop(); statusText.innerText = "👂 倾听中..."; }
+                if (now - silenceStartTime > currentSilenceLimit) { 
+                    isRecordingChunk = false; 
+                    mediaRecorder.stop(); 
+                    statusText.innerText = "👂 倾听中..."; 
+                }
             }
-            if (isRecordingChunk && (now - recordStartTime > MAX_RECORD_LIMIT)) { isRecordingChunk = false; mediaRecorder.stop(); silenceStartTime = 0; }
+            if (isRecordingChunk && (now - recordStartTime > MAX_RECORD_LIMIT)) { 
+                isRecordingChunk = false; 
+                mediaRecorder.stop(); 
+                silenceStartTime = 0; 
+            }
             animationFrameId = requestAnimationFrame(detectAudioLoop);
         }
 
