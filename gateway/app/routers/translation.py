@@ -1,6 +1,6 @@
 # ==========================================
 # 文件名: routers/translation.py
-# 架构定位: 同声传译业务线 (单次多模态请求 + 逻辑并发锁)
+# 架构定位: 同声传译业务线 (单次多模态请求 + 逻辑并发锁 + 动态历史斩断)
 # ==========================================
 import json
 import logging
@@ -106,14 +106,32 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
         messages = [{"role": "system", "content": system_prompt}]
         
         try:
+            # 🎯 核心物理防御：动态斩断逻辑
             history_data = json.loads(chat_history_str)
-            for h in history_data:
+            valid_history = []
+            
+            # 判断当前 ASR 探测的语种是否在双向对讲的合法集合内
+            is_couple_matched = False
+            if input_lang in [native_lang_base, last_foreign_lang, "unknown"]:
+                is_couple_matched = True
+                
+            if is_couple_matched:
+                # 语种对未变：仅保留最后 1 轮对话 (限制污染范围)
+                if len(history_data) > 0:
+                    valid_history = [history_data[-1]]
+            else:
+                # 语种对剧变：无情斩断所有历史，防止幻觉交叉污染
+                logger.warning(f"[{req_id}] ⚠️ 语种越界 ({input_lang} ∉ {native_lang_base}/{last_foreign_lang}) -> 物理斩断记忆")
+                valid_history = []
+                
+            for h in valid_history:
                 if h.get("original") and h.get("translated"):
                     messages.append({"role": "user", "content": h["original"]})
                     messages.append({"role": "assistant", "content": h["translated"]})
         except Exception as e:
-            logger.warning(f"[{req_id}] ⚠️ 历史记录解析失败: {e}")
+            logger.warning(f"[{req_id}] ⚠️ 历史记录解析失败, 自动回退至 Zero-shot: {e}")
 
+        # 追加当前用户的最新输入
         messages.append({"role": "user", "content": asr_text})
 
         brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.2, "max_tokens": 256}
@@ -152,7 +170,6 @@ async def voice_worker(worker_id: int):
                 task_queue.task_done()
 
 def start_translation_workers():
-    import asyncio # 确保顶部有 import asyncio
     for i in range(MAX_CONCURRENT_TASKS):
         asyncio.create_task(voice_worker(i))
     logger.info(f"✅ 翻译专线: 物理锁定拉起 {MAX_CONCURRENT_TASKS} 个并发 Worker")
