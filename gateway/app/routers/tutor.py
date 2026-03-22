@@ -50,6 +50,8 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
     try:
         wav_bytes = await convert_webm_to_wav(audio_bytes)
         base64_audio = base64.b64encode(wav_bytes).decode("utf-8")
+        target_lang_full_name = LANGUAGES_ZH.get(target_lang, target_lang).title()
+        native_lang_full_name = LANGUAGES_ZH.get(native_lang, native_lang).title()
 
         # ----------------------------------------
         # Step 1: ASR 听写 (外教模式不强制要求 LID，但直接复用多模态接口)
@@ -78,8 +80,6 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
             await chunk_queue.put({"event": "end", "reason": "empty_audio"})
             return
 
-        target_lang_full_name = LANGUAGES_ZH.get(target_lang, target_lang).title()
-        native_lang_full_name = LANGUAGES_ZH.get(native_lang, native_lang).title()
         await chunk_queue.put({
             "event": "start", 
             "original_text": asr_text, 
@@ -89,19 +89,22 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         # ----------------------------------------
         # Step 2: 组装外教 Stateful History
         # ----------------------------------------
+        
+        # 🎯 核心逻辑：双语平等权限释放
         if allow_native:
-            native_rule = f"用户是完全的初学者，你可以使用少量的{native_lang_full_name}进行辅助解释和鼓励，但核心对话仍需尽量保持在{target_lang_full_name}。"
+            native_rule = f"【双语平等切换】：每次教新词/句子都要用{native_lang_full_name}解释一遍。每次提要求和问问题都要用{native_lang_full_name}解释一遍。其他内容使用{target_lang_full_name}回复。不要有任何强迫用户只听外语的执念。"
         else:
-            native_rule = f"你必须且只能使用{target_lang_full_name}回复，绝对严禁使用{native_lang_full_name}。"
-        logger.info(f"[allow_native {allow_native}]")
-        system_prompt = f"""你是一位专业、耐心、幽默的{target_lang_full_name}外教。
+            native_rule = f"【纯净外语环境】：你必须且只能使用{target_lang_full_name}回复，绝对严禁使用{native_lang_full_name}。"
+
+        # 🎯 降维人设：彻底抹除“外教”高高在上的强制感
+        system_prompt = f"""你是一位精通{native_lang_full_name}和{target_lang_full_name}的双语语言向导。
 规则：
-1. 你的任务是与用户进行自然的口语对话练习，{native_rule}。
-2. 每次回复要简短、口语化，像真人在聊天（控制在1-3句话内）。
-3. 输入文本来自语音识别(ASR)，可能包含同音错别字、标点错误或语义断层。请务必根据上下文逻辑进行合理的自动纠错与润色后，再进行回复
-4. 如果用户的表达有明显语法错误，可以在回复中自然地给出简短建议，然后继续话题
-5. 用户的母语是{native_lang_full_name}, 如果用户的母语和你的外教语言一样，那你们就是在练习口语
-6. 绝对不要输出任何 Markdown 格式、发音标记或翻译解析，只输出对话文本本身。"""
+1. {native_rule}
+2. 每次回复要极度简短、口语化，像真人在微信聊天（控制在1-3句话内）。
+3. ⚠️【跨语种声学纠错】：用户的输入来自ASR，中外语混讲时极易产生荒谬的音译错误（例如把法语 'Bonjour' 强行听成中文的 '分数' 或 '松鼠'）。当遇到极其突兀的中文词汇时，务必在脑内将其转化为拼音，反推发音最接近的{target_lang_full_name}单词，完成心理纠错后再自然回复。
+4. 如果用户的表达有语法错误，极其简短地纠正一下，然后继续引导对话。
+5. 如果用户的母语和你的语言一样，那你们就是在练习口语
+6. 只输出人类能直接读出来的纯文本对话。"""
         
         messages = [{"role": "system", "content": system_prompt}]
         
@@ -121,7 +124,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         # ----------------------------------------
         # Step 3: 请求大模型进行流式对话
         # ----------------------------------------
-        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.5, "max_tokens": 256}
+        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.5, "max_tokens": 512}
 
         t_llm_start = time.time()
         full_reply_text = ""

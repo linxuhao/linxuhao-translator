@@ -41,7 +41,7 @@ services:
     environment:
       - HIP_VISIBLE_DEVICES=0
       - VLLM_USE_TRITON_AWQ=1
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     entrypoint: []
@@ -52,7 +52,7 @@ services:
       --dtype float16
       --max-model-len 32768
       --gpu-memory-utilization 0.95
-      --max-num-seqs 64
+      --max-num-seqs 80
       --served-model-name qwen3
       --trust-remote-code
     restart: unless-stopped
@@ -76,7 +76,7 @@ services:
     environment:
       - HIP_VISIBLE_DEVICES=1
       - VLLM_USE_TRITON_AWQ=1
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     entrypoint: []
@@ -86,7 +86,7 @@ services:
       --dtype float16
       --max-model-len 8192
       --gpu-memory-utilization 0.85
-      --max-num-seqs 64
+      --max-num-seqs 80
       --served-model-name qwen3-asr
       --trust-remote-code
     restart: unless-stopped
