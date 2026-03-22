@@ -109,7 +109,7 @@
 <body>
     <div class="header">
         <div class="header-left">
-            <h1 data-i18n="title">👨‍🏫 外教陪聊</h1>
+            <h1 data-i18n="title_tutor">👨‍🏫 外教陪聊</h1>
             <div class="lang-indicator" data-i18n="detecting">沉浸式口语对练</div>
         </div>
         <div style="display: flex; flex-direction: column; gap: 8px; align-items: flex-end;">
@@ -154,7 +154,7 @@
             <span class="tab-label" data-i18n="tab_admin">设置</span>
         </a>
     </div>
-    <script src="/resources/i18n.js?v=1.1"></script>
+    <script src="/resources/i18n.js?v=1.2"></script>
     <script>
 
         // 🎯 核心状态：聊天记录数组 (结构: {user: "...", tutor: "..."})
@@ -181,25 +181,6 @@
         const vadLevelBar = document.getElementById('vadLevelBar');
         const vadLevelFill = document.getElementById('vadLevelFill');
 
-        function updateNativeToggleUI() {
-            allowNativeToggle.classList.toggle('active', isNativeAllowed);
-            const statusKey = isNativeAllowed ? 'btn_native_on' : 'btn_native_off';
-            allowNativeToggle.setAttribute('data-i18n', statusKey);
-            
-            // 🎯 O(1) 物理直达更新，杜绝全局重绘浪费 CPU 算力
-            if (typeof I18N_DICT !== 'undefined') {
-                const currentLang = localStorage.getItem('nativeLangPref') || 'zh';
-                const dict = I18N_DICT[currentLang] || I18N_DICT["en"] || I18N_DICT["zh"];
-                if (dict[statusKey]) {
-                    allowNativeToggle.innerText = dict[statusKey];
-                }
-            }
-        }
-        allowNativeToggle.addEventListener('click', () => {
-            isNativeAllowed = !isNativeAllowed;
-            localStorage.setItem('tutorNativeAllowed', isNativeAllowed);
-            updateNativeToggleUI();
-        });
         // --- UI 初始化 ---
         function initTutorUI() {
             // Tutor 的学习语言下拉框 (不受 UI 语言影响)
@@ -224,6 +205,33 @@
             }).catch(()=>{});
         }
         
+        function updateStatusUI(statusKey) {
+            if (typeof I18N_DICT === 'undefined') return;
+            const dict = I18N_DICT[nativeLang] || I18N_DICT["zh"];
+            if (dict[statusKey]) {
+                statusText.innerText = dict[statusKey];
+            }
+        }
+
+        function updateNativeToggleUI() {
+            allowNativeToggle.classList.toggle('active', isNativeAllowed);
+            const statusKey = isNativeAllowed ? 'btn_native_on' : 'btn_native_off';
+            allowNativeToggle.setAttribute('data-i18n', statusKey);
+            
+            // 🎯 O(1) 物理直达更新，杜绝全局重绘浪费 CPU 算力
+            if (typeof I18N_DICT !== 'undefined') {
+                const dict = I18N_DICT[nativeLang] || I18N_DICT["en"] || I18N_DICT["zh"];
+                if (dict[statusKey]) {
+                    allowNativeToggle.innerText = dict[statusKey];
+                }
+            }
+        }
+        allowNativeToggle.addEventListener('click', () => {
+            isNativeAllowed = !isNativeAllowed;
+            localStorage.setItem('tutorNativeAllowed', isNativeAllowed);
+            updateNativeToggleUI();
+        });
+
         targetLangSelect.addEventListener('change', (e) => localStorage.setItem('tutorLangPref', e.target.value));
         function syncHistory() { localStorage.setItem('tutorQueueHistory', JSON.stringify(tutorHistory)); }
 
@@ -281,7 +289,7 @@
             // 🎯 开始发音，切入保守阈值模式
             utterance.onstart = () => { 
                 isTTSPlaying = true;
-                statusText.innerText = "🔊 发音中 (大声说话可打断)..."; 
+                updateStatusUI('status_speak_tutor');; 
                 vadLevelBar.style.display = 'none'; 
             };
             
@@ -289,10 +297,10 @@
             utterance.onend = () => { 
                 isTTSPlaying = false;
                 if (isVadActive) { 
-                    statusText.innerText = "👂 倾听中..."; 
+                    updateStatusUI('status_listen');
                     vadLevelBar.style.display = 'block'; 
                 } else { 
-                    statusText.innerText = "系统已休眠"; 
+                    updateStatusUI('status_sleep');
                 }
             };
             
@@ -309,8 +317,8 @@
             if (confirm("确认清空当前外教的记忆？")) {
                 if ('speechSynthesis' in window) window.speechSynthesis.cancel();
                 tutorHistory = []; syncHistory(); renderChat();
-                if (isVadActive) { statusText.innerText = "👂 倾听中..."; vadLevelBar.style.display = 'block'; } 
-                else { statusText.innerText = "系统已休眠"; vadLevelBar.style.display = 'none'; }
+                if (isVadActive) { updateStatusUI('status_listen'); vadLevelBar.style.display = 'block'; } 
+                else { updateStatusUI('status_sleep'); vadLevelBar.style.display = 'none'; }
             }
         });
 
@@ -322,7 +330,7 @@
         // --- VAD 采集与状态机 ---
         async function toggleVAD() {
             if (isVadActive) {
-                isVadActive = false; vadToggleBtn.classList.remove('active'); statusText.innerText = "系统已休眠"; vadLevelBar.style.display = 'none';
+                isVadActive = false; vadToggleBtn.classList.remove('active'); updateStatusUI('status_sleep'); vadLevelBar.style.display = 'none';
                 cancelAnimationFrame(animationFrameId);
                 if (isRecordingChunk) { mediaRecorder.stop(); isRecordingChunk = false; }
                 if (audioContext) audioContext.suspend();
@@ -340,7 +348,7 @@
                 mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
                 mediaRecorder.onstop = () => { const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType }); audioChunks = []; sendTutorStream(blob); };
 
-                isVadActive = true; vadToggleBtn.classList.add('active'); statusText.innerText = "👂 倾听中..."; vadLevelBar.style.display = 'block';
+                isVadActive = true; vadToggleBtn.classList.add('active'); updateStatusUI('status_listen'); vadLevelBar.style.display = 'block';
                 await requestWakeLock(); detectAudioLoop();
             } catch (err) { alert("麦克风权限被拒或设备异常"); }
         }
@@ -389,14 +397,14 @@
                     isRecordingChunk = true; 
                     recordStartTime = now; 
                     mediaRecorder.start(); 
-                    statusText.innerText = "🎙️ 捕获中..."; 
+                    updateStatusUI('status_capture'); 
                 }
             } else if (isRecordingChunk) {
                 if (silenceStartTime === 0) silenceStartTime = now;
                 if (now - silenceStartTime > currentSilenceLimit) { 
                     isRecordingChunk = false; 
                     mediaRecorder.stop(); 
-                    statusText.innerText = "👂 倾听中..."; 
+                    updateStatusUI('status_listen'); 
                 }
             }
             if (isRecordingChunk && (now - recordStartTime > MAX_RECORD_LIMIT)) { 
