@@ -19,36 +19,36 @@ const SUPPORTED_LANGS = [
 ];
 
 const I18N_DICT = {
-    "zh": { title: "🗣️ 随身翻译官", detecting: "环境语种: 待检测", btn_play: "▶️ 播放", btn_export: "💾 导出", btn_clear: "🗑️ 清空", btn_start: "点击开启同传", status_sleep: "系统已休眠", status_listen: "👂 倾听中...", status_capture: "🎙️ 捕获中...", status_speak: "🔊 正在播报..." },
-    "en": { title: "🗣️ AI Translator", detecting: "Env Lang: Detecting", btn_play: "▶️ Play", btn_export: "💾 Export", btn_clear: "🗑️ Clear", btn_start: "Tap to Start", status_sleep: "System Asleep", status_listen: "👂 Listening...", status_capture: "🎙️ Capturing...", status_speak: "🔊 Speaking..." },
-    "yue": { title: "🗣️ AI 隨身翻譯", detecting: "環境語言: 偵測中", btn_play: "▶️ 播放", btn_export: "💾 匯出", btn_clear: "🗑️ 清除", btn_start: "點擊開始", status_sleep: "系統已休眠", status_listen: "👂 聆聽中...", status_capture: "🎙️ 擷取中...", status_speak: "🔊 播放中..." },
-    "ar": { title: "🗣️ المترجم الذكي", detecting: "لغة البيئة: جاري الكشف", btn_play: "▶️ تشغيل", btn_export: "💾 تصدير", btn_clear: "🗑️ مسح", btn_start: "اضغط للبدء", status_sleep: "النظام في وضع السكون", status_listen: "👂 يستمع...", status_capture: "🎙️ يسجل...", status_speak: "🔊 يتحدث..." },
-    "de": { title: "🗣️ AI-Übersetzer", detecting: "Umgebungsspr.: Erkennung", btn_play: "▶️ Abspielen", btn_export: "💾 Exportieren", btn_clear: "🗑️ Löschen", btn_start: "Starten", status_sleep: "System im Ruhezustand", status_listen: "👂 Hört zu...", status_capture: "🎙️ Nimmt auf...", status_speak: "🔊 Spricht..." },
-    "fr": { title: "🗣️ Traducteur IA", detecting: "Langue Env: Détection", btn_play: "▶️ Jouer", btn_export: "💾 Exporter", btn_clear: "🗑️ Effacer", btn_start: "Démarrer", status_sleep: "En Veille", status_listen: "👂 Écoute...", status_capture: "🎙️ Capture...", status_speak: "🔊 Parle..." },
-    "es": { title: "🗣️ Traductor IA", detecting: "Idioma Env: Detectando", btn_play: "▶️ Reproducir", btn_export: "💾 Exportar", btn_clear: "🗑️ Borrar", btn_start: "Iniciar", status_sleep: "Sistema en Reposo", status_listen: "👂 Escuchando...", status_capture: "🎙️ Capturando...", status_speak: "🔊 Hablando..." },
-    "pt": { title: "🗣️ Tradutor IA", detecting: "Idioma Amb: Detectando", btn_play: "▶️ Reproduzir", btn_export: "💾 Exportar", btn_clear: "🗑️ Limpar", btn_start: "Iniciar", status_sleep: "Sistema em Espera", status_listen: "👂 Ouvindo...", status_capture: "🎙️ Capturando...", status_speak: "🔊 Falando..." },
-    "id": { title: "🗣️ Penerjemah AI", detecting: "Bahasa Sekitar: Mendeteksi", btn_play: "▶️ Putar", btn_export: "💾 Ekspor", btn_clear: "🗑️ Hapus", btn_start: "Mulai", status_sleep: "Sistem Tidur", status_listen: "👂 Mendengarkan...", status_capture: "🎙️ Menangkap...", status_speak: "🔊 Berbicara..." },
-    "it": { title: "🗣️ Traduttore IA", detecting: "Lingua Amb: Rilevamento", btn_play: "▶️ Riproduci", btn_export: "💾 Esporta", btn_clear: "🗑️ Cancella", btn_start: "Inizia", status_sleep: "Sistema in Sospensione", status_listen: "👂 Ascoltando...", status_capture: "🎙️ Acquisizione...", status_speak: "🔊 Parlando..." },
-    "ko": { title: "🗣️ AI 번역기", detecting: "환경 언어: 감지 중", btn_play: "▶️ 재생", btn_export: "💾 내보내기", btn_clear: "🗑️ 지우기", btn_start: "시작하기", status_sleep: "시스템 대기 중", status_listen: "👂 듣는 중...", status_capture: "🎙️ 녹음 중...", status_speak: "🔊 말하는 중..." },
-    "ru": { title: "🗣️ ИИ-Переводчик", detecting: "Язык среды: Распознавание", btn_play: "▶️ Играть", btn_export: "💾 Экспорт", btn_clear: "🗑️ Очистить", btn_start: "Начать", status_sleep: "Система спит", status_listen: "👂 Слушаю...", status_capture: "🎙️ Запись...", status_speak: "🔊 Говорю..." },
-    "th": { title: "🗣️ นักแปล AI", detecting: "ภาษา: กำลังตรวจจับ", btn_play: "▶️ เล่น", btn_export: "💾 ส่งออก", btn_clear: "🗑️ ล้าง", btn_start: "เริ่ม", status_sleep: "ระบบสลีป", status_listen: "👂 กำลังฟัง...", status_capture: "🎙️ กำลังบันทึก...", status_speak: "🔊 กำลังพูด..." },
-    "vi": { title: "🗣️ Trình dịch AI", detecting: "Ngôn ngữ: Đang phát hiện", btn_play: "▶️ Phát", btn_export: "💾 Xuất", btn_clear: "🗑️ Xóa", btn_start: "Bắt đầu", status_sleep: "Hệ thống Đang ngủ", status_listen: "👂 Đang nghe...", status_capture: "🎙️ Đang thu...", status_speak: "🔊 Đang nói..." },
-    "ja": { title: "🗣️ AI翻訳機", detecting: "環境言語: 検出中", btn_play: "▶️ 再生", btn_export: "💾 出力", btn_clear: "🗑️ 消去", btn_start: "開始", status_sleep: "待機中", status_listen: "👂 リスニング...", status_capture: "🎙️ 録音中...", status_speak: "🔊 再生中..." },
-    "tr": { title: "🗣️ AI Çevirmen", detecting: "Ortam Dili: Algılanıyor", btn_play: "▶️ Oynat", btn_export: "💾 Dışa Aktar", btn_clear: "🗑️ Temizle", btn_start: "Başla", status_sleep: "Sistem Uyku Modunda", status_listen: "👂 Dinleniyor...", status_capture: "🎙️ Kaydediliyor...", status_speak: "🔊 Konuşuluyor..." },
-    "hi": { title: "🗣️ AI अनुवादक", detecting: "परिवेश भाषा: पता लगा रहा है", btn_play: "▶️ चलाएं", btn_export: "💾 निर्यात करें", btn_clear: "🗑️ साफ़ करें", btn_start: "शुरू करें", status_sleep: "सिस्टम स्लीप मोड में", status_listen: "👂 सुन रहा है...", status_capture: "🎙️ कैप्चर कर रहा है...", status_speak: "🔊 बोल रहा है..." },
-    "ms": { title: "🗣️ Penterjemah AI", detecting: "Bahasa Sekitar: Mengesan", btn_play: "▶️ Main", btn_export: "💾 Eksport", btn_clear: "🗑️ Padam", btn_start: "Mula", status_sleep: "Sistem Tidur", status_listen: "👂 Mendengar...", status_capture: "🎙️ Menangkap...", status_speak: "🔊 Bercakap..." },
-    "nl": { title: "🗣️ AI-Vertaler", detecting: "Omgevingstaal: Detecteren", btn_play: "▶️ Afspelen", btn_export: "💾 Exporteren", btn_clear: "🗑️ Wissen", btn_start: "Starten", status_sleep: "Systeem in Slaapstand", status_listen: "👂 Luisteren...", status_capture: "🎙️ Opnemen...", status_speak: "🔊 Spreken..." },
-    "sv": { title: "🗣️ AI-Översättare", detecting: "Miljö Språk: Detekterar", btn_play: "▶️ Spela", btn_export: "💾 Exportera", btn_clear: "🗑️ Rensa", btn_start: "Starta", status_sleep: "System i Viloläge", status_listen: "👂 Lyssnar...", status_capture: "🎙️ Spelar in...", status_speak: "🔊 Talar..." },
-    "da": { title: "🗣️ AI-Oversætter", detecting: "Miljøsprog: Detekterer", btn_play: "▶️ Afspil", btn_export: "💾 Eksporter", btn_clear: "🗑️ Ryd", btn_start: "Start", status_sleep: "System i Dvale", status_listen: "👂 Lytter...", status_capture: "🎙️ Optager...", status_speak: "🔊 Taler..." },
-    "fi": { title: "🗣️ AI-Kääntäjä", detecting: "Ympäristön kieli: Tunnistetaan", btn_play: "▶️ Toista", btn_export: "💾 Vie", btn_clear: "🗑️ Tyhjennä", btn_start: "Aloita", status_sleep: "Järjestelmä Lepotilassa", status_listen: "👂 Kuunnellaan...", status_capture: "🎙️ Nauhoitetaan...", status_speak: "🔊 Puhutaan..." },
-    "pl": { title: "🗣️ Tłumacz AI", detecting: "Język otocz: Wykrywanie", btn_play: "▶️ Odtwórz", btn_export: "💾 Eksportuj", btn_clear: "🗑️ Wyczyść", btn_start: "Rozpocznij", status_sleep: "System w Uśpieniu", status_listen: "👂 Słuchanie...", status_capture: "🎙️ Nagrywanie...", status_speak: "🔊 Mówienie..." },
-    "cs": { title: "🗣️ AI Překladatel", detecting: "Jazyk prostř: Detekce", btn_play: "▶️ Přehrát", btn_export: "💾 Exportovat", btn_clear: "🗑️ Vymazat", btn_start: "Začít", status_sleep: "Systém v Režimu Spánku", status_listen: "👂 Poslouchám...", status_capture: "🎙️ Nahrávání...", status_speak: "🔊 Mluvím..." },
-    "fil": { title: "🗣️ Tagasalin ng AI", detecting: "Wika ng Paligid: Tinutukoy", btn_play: "▶️ I-play", btn_export: "💾 I-export", btn_clear: "🗑️ I-clear", btn_start: "Simulan", status_sleep: "Natutulog ang Sistema", status_listen: "👂 Nakikinig...", status_capture: "🎙️ Nagre-record...", status_speak: "🔊 Nagsasalita..." },
-    "fa": { title: "🗣️ مترجم هوش مصنوعی", detecting: "زبان محیط: تشخیص", btn_play: "▶️ پخش", btn_export: "💾 خروجی", btn_clear: "🗑️ پاک کردن", btn_start: "شروع", status_sleep: "سیستم در حالت خواب", status_listen: "👂 در حال گوش دادن...", status_capture: "🎙️ در حال ضبط...", status_speak: "🔊 در حال صحبت..." },
-    "el": { title: "🗣️ Μεταφραστής AI", detecting: "Γλώσσα: Ανίχνευση", btn_play: "▶️ Αναπαραγωγή", btn_export: "💾 Εξαγωγή", btn_clear: "🗑️ Εκκαθάριση", btn_start: "Εκκίνηση", status_sleep: "Σύστημα σε Αναστολή", status_listen: "👂 Ακούει...", status_capture: "🎙️ Καταγράφει...", status_speak: "🔊 Μιλάει..." },
-    "hu": { title: "🗣️ AI Fordító", detecting: "Környezeti nyelv: Észlelés", btn_play: "▶️ Lejátszás", btn_export: "💾 Exportálás", btn_clear: "🗑️ Törlés", btn_start: "Indítás", status_sleep: "Rendszer Alvó Módban", status_listen: "👂 Figyelés...", status_capture: "🎙️ Rögzítés...", status_speak: "🔊 Beszéd..." },
-    "mk": { title: "🗣️ AI Преведувач", detecting: "Јазик на окол: Детектирање", btn_play: "▶️ Пушти", btn_export: "💾 Извези", btn_clear: "🗑️ Исчисти", btn_start: "Започни", status_sleep: "Системот е во мирување", status_listen: "👂 Слушам...", status_capture: "🎙️ Снимам...", status_speak: "🔊 Зборувам..." },
-    "ro": { title: "🗣️ Traducător AI", detecting: "Limba mediu: Detectare", btn_play: "▶️ Redare", btn_export: "💾 Export", btn_clear: "🗑️ Șterge", btn_start: "Începe", status_sleep: "Sistem în Așteptare", status_listen: "👂 Ascultă...", status_capture: "🎙️ Capturează...", status_speak: "🔊 Vorbește..." }
+    "zh": { title: "🗣️ 随身翻译", detecting: "环境语种: 待检测", btn_start: "🎙️", status_sleep: "系统已休眠", status_listen: "👂 倾听中...", status_capture: "🎙️ 捕获中...", status_speak: "🔊 正在播报...", tab_trans: "同传", tab_tutor: "外教", tab_admin: "设置" },
+    "en": { title: "🗣️ Translator", detecting: "Env Lang: Detecting", btn_start: "🎙️", status_sleep: "System Asleep", status_listen: "👂 Listening...", status_capture: "🎙️ Capturing...", status_speak: "🔊 Speaking...", tab_trans: "Translate", tab_tutor: "Tutor", tab_admin: "Settings" },
+    "yue": { title: "🗣️ 隨身翻譯", detecting: "環境語言: 偵測中", btn_start: "🎙️", status_sleep: "系統已休眠", status_listen: "👂 聆聽中...", status_capture: "🎙️ 擷取中...", status_speak: "🔊 播放中...", tab_trans: "同傳", tab_tutor: "外教", tab_admin: "設定" },
+    "ar": { title: "🗣️ المترجم", detecting: "لغة البيئة: جاري الكشف", btn_start: "🎙️", status_sleep: "وضع السكون", status_listen: "👂 يستمع...", status_capture: "🎙️ يسجل...", status_speak: "🔊 يتحدث...", tab_trans: "ترجمة", tab_tutor: "معلم", tab_admin: "إعدادات" },
+    "de": { title: "🗣️ Übersetzer", detecting: "Umgebung: Erkennung", btn_start: "🎙️", status_sleep: "Ruhezustand", status_listen: "👂 Hört zu...", status_capture: "🎙️ Nimmt auf...", status_speak: "🔊 Spricht...", tab_trans: "Übersetzen", tab_tutor: "Tutor", tab_admin: "Einst." },
+    "fr": { title: "🗣️ Traducteur", detecting: "Langue Env: Détection", btn_start: "🎙️", status_sleep: "En Veille", status_listen: "👂 Écoute...", status_capture: "🎙️ Capture...", status_speak: "🔊 Parle...", tab_trans: "Traduction", tab_tutor: "Prof", tab_admin: "Réglages" },
+    "es": { title: "🗣️ Traductor", detecting: "Idioma Env: Detectando", btn_start: "🎙️", status_sleep: "En Reposo", status_listen: "👂 Escuchando...", status_capture: "🎙️ Capturando...", status_speak: "🔊 Hablando...", tab_trans: "Traducir", tab_tutor: "Tutor", tab_admin: "Ajustes" },
+    "pt": { title: "🗣️ Tradutor", detecting: "Idioma Amb: Detectando", btn_start: "🎙️", status_sleep: "Em Espera", status_listen: "👂 Ouvindo...", status_capture: "🎙️ Capturando...", status_speak: "🔊 Falando...", tab_trans: "Traduzir", tab_tutor: "Tutor", tab_admin: "Ajustes" },
+    "id": { title: "🗣️ Penerjemah", detecting: "Bahasa: Mendeteksi", btn_start: "🎙️", status_sleep: "Sistem Tidur", status_listen: "👂 Mendengarkan...", status_capture: "🎙️ Menangkap...", status_speak: "🔊 Berbicara...", tab_trans: "Terjemahan", tab_tutor: "Tutor", tab_admin: "Pengaturan" },
+    "it": { title: "🗣️ Traduttore", detecting: "Lingua: Rilevamento", btn_start: "🎙️", status_sleep: "In Sospensione", status_listen: "👂 Ascoltando...", status_capture: "🎙️ Acquisizione...", status_speak: "🔊 Parlando...", tab_trans: "Traduci", tab_tutor: "Tutor", tab_admin: "Impost." },
+    "ko": { title: "🗣️ 번역기", detecting: "언어: 감지 중", btn_start: "🎙️", status_sleep: "대기 중", status_listen: "👂 듣는 중...", status_capture: "🎙️ 녹음 중...", status_speak: "🔊 재생 중...", tab_trans: "번역", tab_tutor: "튜터", tab_admin: "설정" },
+    "ru": { title: "🗣️ Переводчик", detecting: "Язык: Распознавание", btn_start: "🎙️", status_sleep: "Спящий режим", status_listen: "👂 Слушаю...", status_capture: "🎙️ Запись...", status_speak: "🔊 Говорю...", tab_trans: "Перевод", tab_tutor: "Репетитор", tab_admin: "Настройки" },
+    "th": { title: "🗣️ นักแปล", detecting: "ภาษา: กำลังตรวจจับ", btn_start: "🎙️", status_sleep: "โหมดสลีป", status_listen: "👂 กำลังฟัง...", status_capture: "🎙️ กำลังบันทึก...", status_speak: "🔊 กำลังพูด...", tab_trans: "แปล", tab_tutor: "ติวเตอร์", tab_admin: "ตั้งค่า" },
+    "vi": { title: "🗣️ Trình dịch", detecting: "Ngôn ngữ: Đang phát hiện", btn_start: "🎙️", status_sleep: "Đang ngủ", status_listen: "👂 Đang nghe...", status_capture: "🎙️ Đang thu...", status_speak: "🔊 Đang nói...", tab_trans: "Dịch", tab_tutor: "Gia sư", tab_admin: "Cài đặt" },
+    "ja": { title: "🗣️ 翻訳機", detecting: "環境言語: 検出中", btn_start: "🎙️", status_sleep: "待機中", status_listen: "👂 リスニング...", status_capture: "🎙️ 録音中...", status_speak: "🔊 再生中...", tab_trans: "翻訳", tab_tutor: "講師", tab_admin: "設定" },
+    "tr": { title: "🗣️ Çevirmen", detecting: "Dil: Algılanıyor", btn_start: "🎙️", status_sleep: "Uyku Modu", status_listen: "👂 Dinleniyor...", status_capture: "🎙️ Kaydediliyor...", status_speak: "🔊 Konuşuluyor...", tab_trans: "Çeviri", tab_tutor: "Eğitmen", tab_admin: "Ayarlar" },
+    "hi": { title: "🗣️ अनुवादक", detecting: "भाषा: पता लगा रहा है", btn_start: "🎙️", status_sleep: "स्लीप मोड", status_listen: "👂 सुन रहा है...", status_capture: "🎙️ कैप्चर कर रहा है...", status_speak: "🔊 बोल रहा है...", tab_trans: "अनुवाद", tab_tutor: "शिक्षक", tab_admin: "सेटिंग्स" },
+    "ms": { title: "🗣️ Penterjemah", detecting: "Bahasa: Mengesan", btn_start: "🎙️", status_sleep: "Tidur", status_listen: "👂 Mendengar...", status_capture: "🎙️ Menangkap...", status_speak: "🔊 Bercakap...", tab_trans: "Terjemah", tab_tutor: "Tutor", tab_admin: "Tetapan" },
+    "nl": { title: "🗣️ Vertaler", detecting: "Taal: Detecteren", btn_start: "🎙️", status_sleep: "Slaapstand", status_listen: "👂 Luisteren...", status_capture: "🎙️ Opnemen...", status_speak: "🔊 Spreken...", tab_trans: "Vertalen", tab_tutor: "Docent", tab_admin: "Instellingen" },
+    "sv": { title: "🗣️ Översättare", detecting: "Språk: Detekterar", btn_start: "🎙️", status_sleep: "Viloläge", status_listen: "👂 Lyssnar...", status_capture: "🎙️ Spelar in...", status_speak: "🔊 Talar...", tab_trans: "Översätt", tab_tutor: "Lärare", tab_admin: "Inställningar" },
+    "da": { title: "🗣️ Oversætter", detecting: "Sprog: Detekterer", btn_start: "🎙️", status_sleep: "Dvale", status_listen: "👂 Lytter...", status_capture: "🎙️ Optager...", status_speak: "🔊 Taler...", tab_trans: "Oversæt", tab_tutor: "Tutor", tab_admin: "Indstillinger" },
+    "fi": { title: "🗣️ Kääntäjä", detecting: "Kieli: Tunnistetaan", btn_start: "🎙️", status_sleep: "Lepotilassa", status_listen: "👂 Kuunnellaan...", status_capture: "🎙️ Nauhoitetaan...", status_speak: "🔊 Puhutaan...", tab_trans: "Käännä", tab_tutor: "Opettaja", tab_admin: "Asetukset" },
+    "pl": { title: "🗣️ Tłumacz", detecting: "Język: Wykrywanie", btn_start: "🎙️", status_sleep: "W Uśpieniu", status_listen: "👂 Słuchanie...", status_capture: "🎙️ Nagrywanie...", status_speak: "🔊 Mówienie...", tab_trans: "Tłumacz", tab_tutor: "Nauczyciel", tab_admin: "Ustawienia" },
+    "cs": { title: "🗣️ Překladatel", detecting: "Jazyk: Detekce", btn_start: "🎙️", status_sleep: "Režim Spánku", status_listen: "👂 Poslouchám...", status_capture: "🎙️ Nahrávání...", status_speak: "🔊 Mluvím...", tab_trans: "Překlad", tab_tutor: "Lektor", tab_admin: "Nastavení" },
+    "fil": { title: "🗣️ Tagasalin", detecting: "Wika: Tinutukoy", btn_start: "🎙️", status_sleep: "Natutulog", status_listen: "👂 Nakikinig...", status_capture: "🎙️ Nagre-record...", status_speak: "🔊 Nagsasalita...", tab_trans: "Isalin", tab_tutor: "Tutor", tab_admin: "Mga Setting" },
+    "fa": { title: "🗣️ مترجم", detecting: "زبان: تشخیص", btn_start: "🎙️", status_sleep: "حالت خواب", status_listen: "👂 در حال شنیدن...", status_capture: "🎙️ در حال ضبط...", status_speak: "🔊 در حال صحبت...", tab_trans: "ترجمه", tab_tutor: "معلم", tab_admin: "تنظیمات" },
+    "el": { title: "🗣️ Μεταφραστής", detecting: "Γλώσσα: Ανίχνευση", btn_start: "🎙️", status_sleep: "Σε Αναστολή", status_listen: "👂 Ακούει...", status_capture: "🎙️ Καταγράφει...", status_speak: "🔊 Μιλάει...", tab_trans: "Μετάφραση", tab_tutor: "Καθηγητής", tab_admin: "Ρυθμίσεις" },
+    "hu": { title: "🗣️ Fordító", detecting: "Nyelv: Észlelés", btn_start: "🎙️", status_sleep: "Alvó Mód", status_listen: "👂 Figyelés...", status_capture: "🎙️ Rögzítés...", status_speak: "🔊 Beszéd...", tab_trans: "Fordítás", tab_tutor: "Oktató", tab_admin: "Beállítások" },
+    "mk": { title: "🗣️ Преведувач", detecting: "Јазик: Детектирање", btn_start: "🎙️", status_sleep: "Мирување", status_listen: "👂 Слушам...", status_capture: "🎙️ Снимам...", status_speak: "🔊 Зборувам...", tab_trans: "Преведи", tab_tutor: "Тутор", tab_admin: "Поставки" },
+    "ro": { title: "🗣️ Traducător", detecting: "Limba: Detectare", btn_start: "🎙️", status_sleep: "În Așteptare", status_listen: "👂 Ascultă...", status_capture: "🎙️ Capturează...", status_speak: "🔊 Vorbește...", tab_trans: "Traducere", tab_tutor: "Profesor", tab_admin: "Setări" }
 };
 
 // --- 2. 核心状态机与常量 ---
@@ -87,14 +87,20 @@ function renderLangOptions() {
 
 function applyUILanguage(langCode) {
     const dict = I18N_DICT[langCode] || I18N_DICT["en"] || I18N_DICT["zh"];
+    
     document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
-        if (dict[key]) el.innerText = dict[key];
+        if (dict[key]) {
+            el.innerText = dict[key];
+        }
     });
     
+    // 动态状态同步
     if (!isVadActive) {
-        statusText.innerText = dict["status_sleep"];
+        // 由于新的麦克风按钮变成了纯 Icon "🎙️"，我们不需要再去覆盖它的文字
+        // 确保你已经把 I18N_DICT 里的 btn_start 改为了 "🎙️"
         vadToggleBtn.innerText = dict["btn_start"];
+        statusText.innerText = dict["status_sleep"];
     }
 }
 
@@ -132,7 +138,11 @@ function initStorageData() {
 async function checkAdminStatus() {
     try {
         const res = await fetch('/api/me');
-        if (res.ok && (await res.json()).role === 'admin') adminLink.style.display = 'flex';
+        if (res.ok && (await res.json()).role === 'admin') {
+            const adminTab = document.getElementById('adminTab');
+            // 🎯 如果是超级管理员，解除 display: none 的封印，按 Flex 布局将其挤入导航栏
+            if (adminTab) adminTab.style.display = 'flex';
+        }
     } catch (e) {}
 }
 
@@ -147,7 +157,9 @@ function renderHistory() {
         if(child.id !== 'streamingBox') child.remove(); 
     });
     
-    translationQueue.forEach((item, index) => {
+    // 🎯 核心重构：倒序遍历 Queue，让最新的翻译卡片排在紧贴着 streamingBox 的下方
+    for (let i = translationQueue.length - 1; i >= 0; i--) {
+        const item = translationQueue[i];
         const div = document.createElement('div');
         div.className = `history-item ${item.played ? 'played' : ''}`;
         
@@ -156,7 +168,7 @@ function renderHistory() {
         checkbox.className = 'history-checkbox'; 
         checkbox.checked = item.checked;
         checkbox.addEventListener('change', (e) => { 
-            translationQueue[index].checked = e.target.checked; 
+            translationQueue[i].checked = e.target.checked; 
             syncHistoryToStorage(); 
         });
 
@@ -166,9 +178,12 @@ function renderHistory() {
 
         div.appendChild(checkbox); 
         div.appendChild(contentDiv);
-        historyList.insertBefore(div, streamingBox); 
-    });
-    historyList.scrollTop = historyList.scrollHeight;
+        
+        // 🎯 改为 appendChild，顺着往下排
+        historyList.appendChild(div); 
+    }
+    // 🎯 渲染完毕后，强制锁定视角在最顶部
+    historyList.scrollTop = 0; 
 }
 
 // --- 7. 屏幕常亮控制 ---
@@ -272,18 +287,21 @@ document.getElementById('clearBtn').addEventListener('click', () => {
     }
 });
 
-document.getElementById('exportBtn').addEventListener('click', () => {
-    if (translationQueue.length === 0) return alert("无记录可导出");
-    let txtContent = "=== 随身翻译官 历史记录 ===\n\n";
-    translationQueue.forEach((item, index) => {
-        txtContent += `[${index + 1}] 原文 (${item.sourceLang}): ${item.original}\n    翻译 (${item.targetLang}): ${item.translated}\n\n`;
+const exportBtn = document.getElementById('exportBtn');
+if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+        if (translationQueue.length === 0) return alert("无记录可导出");
+        let txtContent = "=== 随身翻译官 历史记录 ===\n\n";
+        translationQueue.forEach((item, index) => {
+            txtContent += `[${index + 1}] 原文 (${item.sourceLang}): ${item.original}\n    翻译 (${item.targetLang}): ${item.translated}\n\n`;
+        });
+        const blob = new Blob([txtContent], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `翻译记录_${new Date().toISOString().slice(0,10)}.txt`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     });
-    const blob = new Blob([txtContent], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `翻译记录_${new Date().toISOString().slice(0,10)}.txt`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-});
+}
 
 // --- 10. 核心: VAD 采集与状态机 ---
 async function toggleVAD() {
@@ -434,12 +452,12 @@ async function sendAudioChunkStream(audioBlob) {
                             streamOriginal.innerText = payload.original_text;
                             streamTranslated.innerText = "";
                             streamingBox.style.display = "flex";
-                            historyList.scrollTop = historyList.scrollHeight;
+                            historyList.scrollTop = 0; // 🎯 视线锁定顶部
                         } 
                         else if (payload.event === "token") {
                             streamTranslated.innerText += payload.text;
                             streamItemData.translated += payload.text;
-                            historyList.scrollTop = historyList.scrollHeight;
+                            historyList.scrollTop = 0; // 🎯 视线锁定顶部
                         }
                         else if (payload.event === "end") {
                             streamingBox.style.display = "none";
