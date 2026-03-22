@@ -7,6 +7,7 @@
     <meta name="theme-color" content="#f5f5f7">
     <title>随身翻译官</title>
     <style>
+        /* (你之前发的所有原样 CSS 样式保持不变，全部保留) */
         * { box-sizing: border-box; touch-action: manipulation; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; height: 100vh; background-color: #f5f5f7; color: #333; overflow-x: hidden; }
         .header { margin-top: 5vh; text-align: center; width: 100%; flex-shrink: 0; position: relative; }
@@ -14,11 +15,9 @@
         .lang-indicator { margin-top: 8px; font-size: 14px; color: #86868b; background: #e8e8ed; padding: 4px 12px; border-radius: 12px; display: inline-block; }
         .controls-panel { margin-top: 10px; display: flex; justify-content: center; gap: 10px; }
         .lang-select { padding: 6px 10px; border-radius: 8px; border: 1px solid #d2d2d7; font-size: 14px; background: #fff; outline: none; }
-        
         .admin-link, .github-link { position: absolute; top: 20px; display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; text-decoration: none; font-size: 13px; font-weight: 600; z-index: 100; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
         .admin-link { left: 20px; background: rgba(0, 122, 255, 0.1); color: #007aff; display: none; }
         .github-link { right: 20px; background: rgba(0, 0, 0, 0.05); color: #1d1d1f; }
-
         .history-container { width: 90%; max-width: 500px; flex-grow: 1; margin: 15px 0; background: #fff; border-radius: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
         .history-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px; background: #f9f9f9; border-radius: 12px; border-left: 4px solid #007aff; transition: background 0.3s; }
         .history-item.played { border-left-color: #34c759; opacity: 0.7; }
@@ -26,95 +25,37 @@
         .history-content { flex-grow: 1; font-size: 15px; line-height: 1.4; word-break: break-word; }
         .original-text { color: #888; font-size: 12px; margin-bottom: 4px; }
         .translated-text { color: #1d1d1f; font-weight: 500; }
-
-        /* 打字机占位气泡 */
         .streaming-box { border-left: 4px solid #ff9500; background: #fff8e1; display: none; }
         .streaming-cursor { display: inline-block; width: 6px; height: 14px; background-color: #ff9500; animation: blink 1s step-end infinite; vertical-align: middle; margin-left: 4px;}
         @keyframes blink { 50% { opacity: 0; } }
-
         .interaction-area { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; width: 100%; padding-bottom: 5vh; background: #f5f5f7; z-index: 10;}
         .action-bar { display: flex; gap: 10px; margin-bottom: 15px; width: 90%; max-width: 500px; justify-content: space-between; }
         .action-btn { flex: 1; padding: 12px 0; font-size: 14px; font-weight: 600; color: #fff; border: none; border-radius: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px;}
         .btn-play { background-color: #34c759; box-shadow: 0 4px 10px rgba(52, 199, 89, 0.3); }
         .btn-export { background-color: #5856d6; box-shadow: 0 4px 10px rgba(88, 86, 214, 0.3); }
         .btn-clear { background-color: #ff3b30; box-shadow: 0 4px 10px rgba(255, 59, 48, 0.3); }
-
-        /* VAD 交互核心按钮 */
         .vad-toggle-btn { width: 140px; height: 140px; border-radius: 50%; background: linear-gradient(135deg, #e5e5ea, #d1d1d6); color: #666; font-size: 20px; font-weight: bold; border: none; box-shadow: 0 10px 20px rgba(0,0,0,0.1); transition: all 0.3s ease; user-select: none; }
         .vad-toggle-btn.active { background: linear-gradient(135deg, #007aff, #005bb5); color: white; box-shadow: 0 10px 30px rgba(0, 122, 255, 0.4); animation: pulse 2s infinite; }
         @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 122, 255, 0.4); } 70% { box-shadow: 0 0 0 20px rgba(0, 122, 255, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 122, 255, 0); } }
-        
         .status-text { font-size: 16px; font-weight: 500; margin-top: 15px; height: 20px; color: #666;}
-        
-        /* 能量条探针 */
         .vad-level-bar { width: 100px; height: 4px; background: #ddd; border-radius: 2px; margin-top: 10px; overflow: hidden; display: none; }
         .vad-level-fill { height: 100%; width: 0%; background: #34c759; transition: width 0.1s; }
-        .github-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px; /* 图标与文字的间距 */
-            text-decoration: none;
-            color: #24292f; /* 这里的颜色可根据您的主题调整 */
-            white-space: nowrap; /* 防止文字换行导致布局错乱 */
-        }
-
-        .github-link svg {
-            /* 核心修复：防止在空间不足时被压缩 */
-            flex-shrink: 0; 
-            /* 核心修复：显式指定渲染尺寸，否则在某些布局下会坍缩为 0 */
-            width: 16px;
-            height: 16px;
-            /* 核心修复：确保图标颜色随文字颜色变化 */
-            fill: currentColor; 
-            vertical-align: middle;
-        }
+        .github-link { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; color: #24292f; white-space: nowrap; }
+        .github-link svg { flex-shrink: 0; width: 16px; height: 16px; fill: currentColor; vertical-align: middle; }
     </style>
 </head>
 <body>
     <a href="/admin" target="_blank" id="adminLink" class="admin-link" title="系统管控中心">⚙️ Admin</a>
     <a href="https://github.com/linxuhao/linxuhao-translator" target="_blank" class="github-link" title="View Source on GitHub">
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
-        </svg>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
         <span>GitHub</span>
     </a>
 
     <div class="header">
-        <h1>🗣️ 随身翻译官</h1>
-        <div class="lang-indicator" id="lang-display">环境语种: 待检测</div>
+        <h1 data-i18n="title">🗣️ 随身翻译官</h1>
+        <div class="lang-indicator" id="lang-display" data-i18n="detecting">环境语种: 待检测</div>
         <div class="controls-panel">
-                        <select class="lang-select" id="nativeLang">
-                <option value="zh">中文 (zh)</option>
-                <option value="en">English (en)</option>
-                <option value="yue">粤语 (yue)</option>
-                <option value="ar">العربية (ar)</option>
-                <option value="de">Deutsch (de)</option>
-                <option value="fr">Français (fr)</option>
-                <option value="es">Español (es)</option>
-                <option value="pt">Português (pt)</option>
-                <option value="id">Bahasa Indonesia (id)</option>
-                <option value="it">Italiano (it)</option>
-                <option value="ko">한국어 (ko)</option>
-                <option value="ru">Русский (ru)</option>
-                <option value="th">ไทย (th)</option>
-                <option value="vi">Tiếng Việt (vi)</option>
-                <option value="ja">日本語 (ja)</option>
-                <option value="tr">Türkçe (tr)</option>
-                <option value="hi">हिन्दी (hi)</option>
-                <option value="ms">Bahasa Melayu (ms)</option>
-                <option value="nl">Nederlands (nl)</option>
-                <option value="sv">Svenska (sv)</option>
-                <option value="da">Dansk (da)</option>
-                <option value="fi">Suomi (fi)</option>
-                <option value="pl">Polski (pl)</option>
-                <option value="cs">Čeština (cs)</option>
-                <option value="fil">Filipino (fil)</option>
-                <option value="fa">فارسی (fa)</option>
-                <option value="el">Ελληνικά (el)</option>
-                <option value="hu">Magyar (hu)</option>
-                <option value="mk">Македонски (mk)</option>
-                <option value="ro">Română (ro)</option>
-            </select>
+            <select class="lang-select" id="nativeLang"></select>
         </div>
     </div>
 
@@ -129,440 +70,16 @@
 
     <div class="interaction-area">
         <div class="action-bar">
-            <button class="action-btn btn-play" id="playSelectedBtn">▶️ 播放</button>
-            <button class="action-btn btn-export" id="exportBtn">💾 导出</button>
-            <button class="action-btn btn-clear" id="clearBtn">🗑️ 清空</button>
+            <button class="action-btn btn-play" id="playSelectedBtn" data-i18n="btn_play">▶️ 播放</button>
+            <button class="action-btn btn-export" id="exportBtn" data-i18n="btn_export">💾 导出</button>
+            <button class="action-btn btn-clear" id="clearBtn" data-i18n="btn_clear">🗑️ 清空</button>
         </div>
         
-        <button class="vad-toggle-btn" id="vadToggleBtn">点击开启同传</button>
-        <div class="status-text" id="statusText">系统已休眠</div>
+        <button class="vad-toggle-btn" id="vadToggleBtn" data-i18n="btn_start">点击开启同传</button>
+        <div class="status-text" id="statusText" data-i18n="status_sleep">系统已休眠</div>
         <div class="vad-level-bar" id="vadLevelBar"><div class="vad-level-fill" id="vadLevelFill"></div></div>
     </div>
 
-    <script>
-        // --- 核心状态 ---
-        let translationQueue = []; 
-        let currentForeignLang = "fr"; // 默认外语为 en，防止与 zh 撞车
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-// --- VAD 与流媒体配置 ---
-        let audioContext, analyser, microphone, mediaRecorder;
-        let isVadActive = false, isRecordingChunk = false;
-        let audioChunks = [], silenceStartTime = 0, recordStartTime = 0, animationFrameId;
-
-        const VAD_THRESHOLD = 0.02;     
-        // 🎯 黄金参数矩阵
-        const SILENCE_NORMAL = 1200;    // 阶段1：思考期静音容忍 (1.2秒)
-        const SILENCE_EAGER = 600;      // 阶段2：长句 Eager Cut 容忍 (0.7秒)
-        const EAGER_TRIGGER_TIME = 3000;// 触发阶段2的录音时长阈值 (3秒)
-        const MAX_RECORD_LIMIT = 10000; // 绝对硬切片界限 (10秒)
-
-        // --- DOM 节点 ---
-        const nativeLangSelect = document.getElementById('nativeLang');
-        const historyList = document.getElementById('historyList');
-        const streamingBox = document.getElementById('streamingBox');
-        const streamOriginal = document.getElementById('streamOriginal');
-        const streamTranslated = document.getElementById('streamTranslated');
-        const vadToggleBtn = document.getElementById('vadToggleBtn');
-        const statusText = document.getElementById('statusText');
-        const vadLevelBar = document.getElementById('vadLevelBar');
-        const vadLevelFill = document.getElementById('vadLevelFill');
-        const langDisplay = document.getElementById('lang-display');
-
-        // --- 持久化与鉴权 ---
-        function syncHistoryToStorage() { localStorage.setItem('ttsQueueHistory', JSON.stringify(translationQueue)); }
-
-        function initStorageData() {
-            const savedLang = localStorage.getItem('nativeLangPref');
-            if (savedLang) nativeLangSelect.value = savedLang;
-            else {
-                const sysLangCode = (navigator.language || navigator.userLanguage || "zh").split('-')[0].toLowerCase();
-                const match = Array.from(nativeLangSelect.options).find(opt => opt.value === sysLangCode);
-                nativeLangSelect.value = match ? sysLangCode : "zh";
-                localStorage.setItem('nativeLangPref', nativeLangSelect.value);
-            }
-
-            // 防撞车：确保外语不是母语
-            if (nativeLangSelect.value === currentForeignLang) {
-                currentForeignLang = nativeLangSelect.value === "zh" ? "en" : "zh";
-            }
-
-            const savedHistory = localStorage.getItem('ttsQueueHistory');
-            if (savedHistory) {
-                try {
-                    translationQueue = JSON.parse(savedHistory);
-                    translationQueue.forEach(item => item.checked = false); 
-                    renderHistory();
-                } catch (e) { translationQueue = []; }
-            }
-        }
-        
-        async function checkAdminStatus() {
-            try {
-                const res = await fetch('/api/me');
-                if (res.ok && (await res.json()).role === 'admin') document.getElementById('adminLink').style.display = 'flex';
-            } catch (e) {}
-        }
-        
-        nativeLangSelect.addEventListener('change', (e) => localStorage.setItem('nativeLangPref', e.target.value));
-        if ('speechSynthesis' in window) speechSynthesis.getVoices();
-
-        // --- UI 渲染核心 (修复复选框与列表丢失问题) ---
-        function renderHistory() {
-            // 清空列表，但保留打字机气泡
-            Array.from(historyList.children).forEach(child => { 
-                if(child.id !== 'streamingBox') child.remove(); 
-            });
-            
-            translationQueue.forEach((item, index) => {
-                const div = document.createElement('div');
-                div.className = `history-item ${item.played ? 'played' : ''}`;
-                
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox'; 
-                checkbox.className = 'history-checkbox'; 
-                checkbox.checked = item.checked;
-                checkbox.addEventListener('change', (e) => { 
-                    translationQueue[index].checked = e.target.checked; 
-                    syncHistoryToStorage(); 
-                });
-
-                const contentDiv = document.createElement('div');
-                contentDiv.className = 'history-content';
-                contentDiv.innerHTML = `<div class="original-text">${item.sourceLang.toUpperCase()}: ${item.original || "..."}</div><div class="translated-text">${item.targetLang.toUpperCase()}: ${item.translated}</div>`;
-
-                div.appendChild(checkbox); 
-                div.appendChild(contentDiv);
-                historyList.insertBefore(div, streamingBox); // 确保追加在打字机上方
-            });
-            historyList.scrollTop = historyList.scrollHeight;
-        }
-
-        // --- TTS 播放引擎与基础交互 ---
-        async function playCheckedItems() {
-            if (!('speechSynthesis' in window)) return;
-            window.speechSynthesis.cancel(); 
-            const itemsToPlay = translationQueue.filter(item => item.checked);
-            if (itemsToPlay.length === 0) return;
-
-            statusText.innerText = "🔊 正在播报...";
-            vadLevelBar.style.display = 'none'; 
-
-            // 🎯 提前获取系统所有物理语音包
-            const voices = window.speechSynthesis.getVoices();
-
-            for (let i = 0; i < itemsToPlay.length; i++) {
-                const item = itemsToPlay[i];
-                const langMap = { "zh": "zh-CN", "fr": "fr-FR", "en": "en-US", "es": "es-ES", "ja": "ja-JP" };
-                const targetSystemLang = langMap[item.targetLang] || item.targetLang;
-                
-                const utterance = new SpeechSynthesisUtterance(item.translated);
-                utterance.lang = targetSystemLang;
-
-                // 🎯 核心修复：专为 iOS 打造的 Voice 强制映射逻辑
-                if (voices.length > 0) {
-                    // 1. 尝试精确匹配 (如 fr-FR 匹配 fr-FR 或 fr_FR)
-                    let matchedVoice = voices.find(v => v.lang.replace('_', '-') === targetSystemLang);
-                    // 2. 如果没有精确匹配，尝试宽泛匹配 (如只匹配 fr)
-                    if (!matchedVoice) {
-                        const baseLang = targetSystemLang.split('-')[0];
-                        matchedVoice = voices.find(v => v.lang.startsWith(baseLang));
-                    }
-                    // 3. 强行挂载物理发音人
-                    if (matchedVoice) {
-                        utterance.voice = matchedVoice;
-                    }
-                }
-
-                await new Promise(resolve => {
-                    utterance.onend = () => {
-                        item.checked = false; item.played = true;   
-                        renderHistory(); syncHistoryToStorage();
-                        resolve();
-                    };
-                    utterance.onerror = resolve;
-                    window.speechSynthesis.speak(utterance);
-                });
-            }
-            
-            if (isVadActive) {
-                statusText.innerText = "👂 倾听中...";
-                vadLevelBar.style.display = 'block';
-            } else {
-                statusText.innerText = "系统已休眠";
-            }
-        }
-        
-        document.getElementById('playSelectedBtn').addEventListener('click', playCheckedItems);
-        
-        document.getElementById('clearBtn').addEventListener('click', () => {
-            if (translationQueue.length === 0) return;
-            if (confirm("确认清空记录？")) { 
-                translationQueue = []; 
-                syncHistoryToStorage(); 
-                renderHistory(); 
-            }
-        });
-
-        document.getElementById('exportBtn').addEventListener('click', () => {
-            if (translationQueue.length === 0) { alert("无记录可导出"); return; }
-            let txtContent = "=== 随身翻译官 历史记录 ===\n\n";
-            translationQueue.forEach((item, index) => {
-                txtContent += `[${index + 1}] 原文 (${item.sourceLang}): ${item.original}\n    翻译 (${item.targetLang}): ${item.translated}\n\n`;
-            });
-            const blob = new Blob([txtContent], { type: "text/plain;charset=utf-8" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url; a.download = `翻译记录_${new Date().toISOString().slice(0,10)}.txt`;
-            document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-        });
-
-        // --- 1. 物理层: 屏幕常亮保活引擎全局状态 ---
-        let wakeLock = null;
-
-        async function requestWakeLock() {
-            if ('wakeLock' in navigator) {
-                try {
-                    wakeLock = await navigator.wakeLock.request('screen');
-                    console.log('✅ 屏幕常亮物理锁已激活');
-                    wakeLock.addEventListener('release', () => {
-                        console.log('⚠️ 屏幕常亮已被系统底层释放');
-                    });
-                } catch (err) {
-                    console.error(`❌ 屏幕常亮请求被系统拒绝: ${err.name}, ${err.message}`);
-                }
-            } else {
-                console.warn('⚠️ 当前浏览器不支持 Wake Lock API');
-            }
-        }
-
-        function releaseWakeLock() {
-            if (wakeLock !== null) {
-                wakeLock.release().then(() => {
-                    wakeLock = null;
-                    console.log('💤 屏幕常亮物理锁已手动解除');
-                });
-            }
-        }
-
-        // 🛡️ 终极防御: 监听系统切后台导致的强制释放
-        // 如果 VAD 仍在运行（isVadActive 为 true），且用户切回页面，则自动重建物理锁
-        document.addEventListener('visibilitychange', async () => {
-            if (isVadActive && wakeLock === null && document.visibilityState === 'visible') {
-                console.log('🔄 检测到页面切回且同传运行中，正在重建常亮锁...');
-                await requestWakeLock();
-            }
-        });
-
-        // --- 2. 核心: VAD 状态机 ---
-        async function toggleVAD() {
-            // [状态机：关闭同传]
-            if (isVadActive) {
-                isVadActive = false; 
-                vadToggleBtn.classList.remove('active'); 
-                vadToggleBtn.innerText = "点击开启同传";
-                statusText.innerText = "系统已休眠"; 
-                vadLevelBar.style.display = 'none';
-                cancelAnimationFrame(animationFrameId);
-                
-                if (isRecordingChunk) { mediaRecorder.stop(); isRecordingChunk = false; }
-                if (audioContext) audioContext.suspend();
-                
-                // 🎯 注入点：释放物理锁，允许屏幕自然休眠
-                releaseWakeLock();
-                return;
-            }
-
-            // [状态机：开启同传]
-            try {
-                // AEC 物理防御
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
-                });
-                
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                analyser = audioContext.createAnalyser(); analyser.fftSize = 512;
-                microphone = audioContext.createMediaStreamSource(stream);
-                microphone.connect(analyser);
-
-                let options = { mimeType: 'audio/webm' };
-                if (!MediaRecorder.isTypeSupported('audio/webm')) options = { mimeType: 'audio/mp4' }; 
-                mediaRecorder = new MediaRecorder(stream, options);
-                
-                mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
-                mediaRecorder.onstop = () => {
-                    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
-                    audioChunks = []; sendAudioChunkStream(blob);
-                };
-
-                isVadActive = true; 
-                vadToggleBtn.classList.add('active'); 
-                vadToggleBtn.innerText = "同传运行中";
-                statusText.innerText = "👂 倾听中..."; 
-                vadLevelBar.style.display = 'block';
-                
-                // 🎯 注入点：在获取麦克风权限后，立即申请屏幕常亮物理锁
-                await requestWakeLock();
-                
-                detectAudioLoop();
-            } catch (err) { 
-                alert("麦克风权限被拒或设备异常"); 
-            }
-        }
-        vadToggleBtn.addEventListener('click', toggleVAD);
-
-        function detectAudioLoop() {
-            if (!isVadActive) return;
-            
-            // 🎯 架构升级：彻底移除 TTS window.speechSynthesis.speaking 软件锁
-            // 完全信任设备的硬件 AEC (回声消除) 模块，释放全双工能力！
-
-            const pcmData = new Float32Array(analyser.fftSize);
-            analyser.getFloatTimeDomainData(pcmData);
-            let sumSquares = 0.0;
-            for (const amp of pcmData) sumSquares += amp * amp;
-            const rms = Math.sqrt(sumSquares / pcmData.length);
-            
-            vadLevelFill.style.width = Math.min(100, rms * 1000) + '%';
-            const now = Date.now();
-            
-            // 🎯 动态计算当前静音阈值 (Sliding Window)
-            let currentSilenceLimit = SILENCE_NORMAL;
-            if (isRecordingChunk && (now - recordStartTime > EAGER_TRIGGER_TIME)) {
-                currentSilenceLimit = SILENCE_EAGER; // 超过 3 秒，切片策略变得更具侵略性
-            }
-
-            if (rms > VAD_THRESHOLD) {
-                silenceStartTime = 0; 
-                if (!isRecordingChunk) {
-                    isRecordingChunk = true; recordStartTime = now;
-                    mediaRecorder.start(); statusText.innerText = "🎙️ 捕获中...";
-                }
-            } else {
-                if (isRecordingChunk) {
-                    if (silenceStartTime === 0) silenceStartTime = now;
-                    // 🎯 应用动态静音阈值
-                    if (now - silenceStartTime > currentSilenceLimit) {
-                        isRecordingChunk = false; mediaRecorder.stop(); statusText.innerText = "👂 倾听中...";
-                    }
-                }
-            }
-            
-            // 🎯 10 秒绝对护城河
-            if (isRecordingChunk && (now - recordStartTime > MAX_RECORD_LIMIT)) {
-                isRecordingChunk = false; mediaRecorder.stop(); silenceStartTime = 0;
-            }
-            
-            animationFrameId = requestAnimationFrame(detectAudioLoop);
-        }
-
-        // --- 核心: SSE 推流处理器 ---
-        async function sendAudioChunkStream(audioBlob) {
-            const formData = new FormData();
-            formData.append("audio_file", audioBlob, "chunk.webm");
-            formData.append("native_lang", nativeLangSelect.value); 
-            formData.append("last_foreign_lang", currentForeignLang);
-
-            // 🎯 提取最近 3 句有效的历史记录作为上下文滑动窗口
-            // 避免发送过多导致 LLM 记忆过载或 Token 超标
-            const recentHistory = translationQueue.slice(-3).map(item => ({
-                original: item.original,
-                translated: item.translated
-            }));
-            formData.append("chat_history", JSON.stringify(recentHistory));
-
-            try {
-                const response = await fetch("/api/stream_voice", { method: "POST", body: formData });
-                if (!response.ok) return;
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder("utf-8");
-                let streamItemData = { original: "", translated: "", sourceLang: "", targetLang: "" };
-
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    
-                    const chunkStr = decoder.decode(value, { stream: true });
-                    const events = chunkStr.split("\n\n");
-                    
-                    for (const ev of events) {
-                        if (ev.startsWith("data: ")) {
-                            try {
-                                const payload = JSON.parse(ev.slice(6));
-                                
-                                if (payload.event === "start") {
-                                    streamItemData.original = payload.original_text;
-                                    streamItemData.sourceLang = payload.source_lang;
-                                    streamItemData.targetLang = payload.target_lang;
-                                    
-                                    // 根据后端的最新探针更新环境语种
-                                    if (payload.detected_foreign_lang && payload.detected_foreign_lang !== nativeLangSelect.value) {
-                                        currentForeignLang = payload.detected_foreign_lang;
-                                        langDisplay.innerText = `环境语种: 自动检测 (${currentForeignLang})`;
-                                    }
-                                    
-                                    streamOriginal.innerText = payload.original_text;
-                                    streamTranslated.innerText = "";
-                                    streamingBox.style.display = "flex";
-                                    historyList.scrollTop = historyList.scrollHeight;
-                                } 
-                                else if (payload.event === "token") {
-                                    streamTranslated.innerText += payload.text;
-                                    streamItemData.translated += payload.text;
-                                    historyList.scrollTop = historyList.scrollHeight;
-                                }
-                                else if (payload.event === "end") {
-                                    streamingBox.style.display = "none";
-                                    if (payload.reason === "empty_audio") return; 
-                                    
-                                    const newItem = {
-                                        original: streamItemData.original, translated: streamItemData.translated,
-                                        sourceLang: streamItemData.sourceLang, targetLang: payload.target_lang,
-                                        checked: isIOS ? true : false, played: false
-                                    };
-                                    translationQueue.push(newItem);
-                                    syncHistoryToStorage();
-                                    renderHistory();
-
-                                    // Android/PC 即时连播
-                                    if (!isIOS && 'speechSynthesis' in window) {
-                                        const utterance = new SpeechSynthesisUtterance(streamItemData.translated);
-                                        utterance.lang = payload.target_lang === 'zh' ? 'zh-CN' : payload.target_lang;
-                                        
-                                        // 播报开始：锁定状态UI
-                                        utterance.onstart = () => {
-                                            statusText.innerText = "🔊 正在播报...";
-                                            vadLevelBar.style.display = 'none';
-                                        };
-
-                                        // 播报结束：释放状态UI
-                                        utterance.onend = () => { 
-                                            newItem.played = true; 
-                                            renderHistory(); 
-                                            syncHistoryToStorage(); 
-                                            if (isVadActive) {
-                                                statusText.innerText = "👂 倾听中...";
-                                                vadLevelBar.style.display = 'block';
-                                            } else {
-                                                statusText.innerText = "系统已休眠";
-                                            }
-                                        };
-                                        window.speechSynthesis.speak(utterance);
-                                    }
-                                }
-                            } catch (err) {}
-                        }
-                    }
-                }
-            } catch (error) { console.error("Stream exception:", error); }
-        }
-
-        // 初始化
-        window.onload = () => { 
-            initStorageData(); 
-            checkAdminStatus(); 
-        };
-    </script>
+    <script src="/resources/app.js?v=1.1"></script>
 </body>
 </html>
