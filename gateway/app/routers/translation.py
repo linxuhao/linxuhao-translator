@@ -131,7 +131,7 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
                     except Exception: pass
                         
         await chunk_queue.put({"event": "end", "target_lang": target_tts_lang})
-        logger.info(f"[{req_id}] 🧠 LLM 完毕 耗时: {int((time.time() - t_llm_start)*1000)}ms | 结果: '{full_trans_text}'")
+        logger.info(f"[{req_id}] 🧠 LLM 完毕 耗时: {int((time.time() - t_llm_start)*1000)}ms | target_lang_full_name: {target_lang_full_name} | 结果: '{full_trans_text}'")
         
     except Exception as e:
         logger.error(f"[{req_id}] 💥 Stream 崩溃: {e}")
