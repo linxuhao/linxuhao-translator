@@ -252,7 +252,7 @@
             rawText = validTurns[validTurns.length - 1].tutor;
         }
         
-        const sentences = rawText.match(/[^。！？.!?]+[。！？.!?]*/g) || [rawText];
+        const sentences = rawText.match(/[^。！？.!?\n\r]+[。！？.!?\n\r]*/g) || [rawText];
         const currentTargetLang = targetLangSelect.value;
         const langMap = { "zh": "zh-CN", "en": "en-US", "fr": "fr-FR", "ja": "ja-JP", "es": "es-ES", "ru": "ru-RU", "ar": "ar-SA" };
         
@@ -262,7 +262,7 @@
                 let mappedLang = langMap[currentTargetLang] || currentTargetLang;
                 
                 // 🎯 物理语种判定：母语辅助开启，且检测到中文字符时，强制切换为中文引擎
-                if (isNativeAllowed && nativeLang === 'zh') {
+                if (isNativeAllowed) {
                     if (/[\u4e00-\u9fa5]/.test(cleanSentence)) {
                         mappedLang = 'zh-CN';
                     }
