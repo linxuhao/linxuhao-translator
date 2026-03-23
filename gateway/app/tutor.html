@@ -38,6 +38,15 @@
         .native-toggle-btn.active {
             background: #e8f5e9; color: #34c759; border-color: #34c759;
         }
+        .native-toggle-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: #e8e8ed;
+            border-color: #d2d2d7;
+            color: #a1a1a6;
+            transform: none;
+            box-shadow: none;
+        }
         /* --- 聊天气泡流 (Chat UI) --- */
         .chat-container { 
             width: 100%; max-width: 600px; flex: 1; min-height: 0; 
@@ -153,7 +162,7 @@
             <span class="tab-label" data-i18n="tab_admin">设置</span>
         </a>
     </div>
-    <script src="/resources/i18n.js?v=1.2"></script>
+    <script src="/resources/i18n.js?v=1.3"></script>
     <script>
     // 🎯 核心状态：聊天记录数组
     let tutorHistory = []; 
@@ -191,9 +200,10 @@
         return rawText
             .replace(/\p{Extended_Pictographic}/gu, '') 
             .replace(/[_*~～]/g, '') 
-            .replace(/（[^）]*）|\([^)]*\)/g, '') 
+            .replace(/（([^）]*)）|\(([^)]*)\)/g, ', $1$2, ')
             .replace(/→/g, ', ') 
             .replace(/—+/g, ', ') 
+            .replace(/«»/g, ', ')
             .trim();
     }
 
@@ -237,7 +247,106 @@
         window.speechSynthesis.speak(utterance);
     }
 
-    // 3. 混合语种物理切句与入队
+    // [重构] 新增第 0 层「中粤特攻拦截层」，基于 LLM 简繁输出特征实现 O(1) 的绝对判定
+
+    function detectBinaryLanguage(sentence, nativeCode, targetCode) {
+        const baseNative = nativeCode.split('-')[0].toLowerCase();
+        const baseTarget = targetCode.split('-')[0].toLowerCase();
+
+        // 0. 中粤特攻拦截层 (Heuristic Shortcut)
+        // 专门针对 zh vs yue 的对抗场景，利用 LLM 的简繁体生成分布直接一票否决
+        if ((baseNative === 'zh' && baseTarget === 'yue') || (baseNative === 'yue' && baseTarget === 'zh')) {
+            // 高频特征池：涵盖了粤语高频词以及最常用的繁体字映射
+            const yueRegex = /[嘅喺佢哋唔冇咗咩睇俾嚟諗嘢係咁啲這個們來沒說麼會樣為現將覺語嗎愛學機動後裡過實對當經種]/;
+            
+            const yueCode = baseNative === 'yue' ? nativeCode : targetCode;
+            const zhCode = baseNative === 'zh' ? nativeCode : targetCode;
+            
+            // 只要包含任何一个繁体/粤字特征，即判定为粤语；否则纯简体默认归属中文
+            return yueRegex.test(sentence) ? yueCode : zhCode;
+        }
+
+        // 1. 绝对物理防御 (Unicode Blocks)
+        // 跨语系对抗（如 zh vs en, ar vs ru）
+        const scriptRegexes = {
+            zh: /[\u4e00-\u9fa5]/,           
+            yue: /[\u4e00-\u9fa5]/,          
+            ja: /[\u3040-\u30ff]/,           // 日文平假名/片假名
+            ko: /[\uac00-\ud7af\u1100-\u11ff]/, // 韩文谚文
+            ar: /[\u0600-\u06FF]/,           // 阿拉伯文
+            fa: /[\u0600-\u06FF]/,           // 波斯文
+            ru: /[\u0400-\u04FF]/,           // 俄文
+            mk: /[\u0400-\u04FF]/,           // 马其顿文
+            th: /[\u0E00-\u0E7F]/,           // 泰文
+            el: /[\u0370-\u03FF]/,           // 希腊文
+            hi: /[\u0900-\u097F]/            // 印地文
+        };
+
+        const matchNativeScript = scriptRegexes[baseNative] ? scriptRegexes[baseNative].test(sentence) : false;
+        const matchTargetScript = scriptRegexes[baseTarget] ? scriptRegexes[baseTarget].test(sentence) : false;
+
+        if (matchNativeScript && !matchTargetScript) return nativeCode;
+        if (matchTargetScript && !matchNativeScript) return targetCode;
+
+
+        // 2. 双轨特征提取引擎 (Dual-track Tokenization)
+        // 同源语系对抗（如 es vs pt, zh vs ja 且同含汉字时）
+        const words = sentence.toLowerCase().match(/[\p{L}\p{M}]+/gu) || [];
+        const cjkChars = sentence.match(/[\u4e00-\u9fa5]/g) || [];
+
+        if (words.length === 0 && cjkChars.length === 0) return targetCode;
+
+        // 极限优化的极高频特征字库
+        const stopWords = {
+            "en": new Set(["the", "is", "are", "you", "and", "to", "it", "that", "of", "in", "we", "i", "what", "for", "with", "this"]),
+            "fr": new Set(["le", "la", "les", "et", "est", "sont", "vous", "il", "que", "de", "en", "nous", "je", "tu", "un", "une", "ce", "c", "l", "d", "j", "qu", "m", "t"]),
+            "es": new Set(["el", "la", "los", "las", "y", "es", "son", "tú", "que", "de", "en", "nosotros", "yo", "un", "una", "pero", "con", "por", "para"]),
+            "pt": new Set(["o", "a", "os", "as", "e", "é", "são", "você", "ele", "que", "de", "em", "nós", "eu", "um", "uma", "mas", "com", "por", "para"]),
+            "id": new Set(["dan", "adalah", "kamu", "dia", "itu", "yang", "dari", "di", "kita", "kami", "saya", "aku", "bisa", "karena", "tidak"]),
+            "ms": new Set(["dan", "ialah", "awak", "dia", "itu", "yang", "dari", "di", "kita", "kami", "saya", "boleh", "kerana", "tidak"]),
+            "de": new Set(["der", "die", "das", "und", "ist", "sind", "sie", "er", "es", "ich", "wir", "zu", "in", "mit", "auf", "für"]),
+            "it": new Set(["il", "lo", "la", "i", "gli", "le", "e", "è", "sono", "voi", "lui", "che", "di", "in", "noi", "io", "un", "una", "c", "l", "con", "per"]),
+            "nl": new Set(["de", "het", "en", "is", "zijn", "jij", "hij", "dat", "van", "in", "wij", "ik", "een", "te", "voor"]),
+            "sv": new Set(["en", "ett", "och", "är", "du", "han", "det", "att", "av", "i", "vi", "jag", "för", "på", "med"]),
+            "da": new Set(["en", "et", "og", "er", "du", "han", "det", "at", "af", "i", "vi", "jeg", "der", "for", "på", "med"]),
+            "fi": new Set(["ja", "on", "ovat", "sinä", "hän", "se", "että", "niin", "me", "minä", "yksi", "ei", "mutta"]),
+            "pl": new Set(["i", "jest", "są", "ty", "on", "że", "z", "w", "my", "ja", "to", "się", "nie", "na"]),
+            "cs": new Set(["a", "je", "jsou", "ty", "on", "že", "z", "v", "my", "já", "to", "se", "ne", "na"]),
+            "hu": new Set(["és", "van", "vannak", "te", "ő", "hogy", "ban", "ben", "mi", "én", "egy", "nem", "az"]),
+            "ro": new Set(["și", "este", "sunt", "tu", "el", "că", "de", "în", "noi", "eu", "un", "o", "cu", "la"]),
+            "vi": new Set(["và", "là", "bạn", "anh", "chị", "nó", "rằng", "của", "trong", "chúng", "tôi", "một", "không", "có"]),
+            "tr": new Set(["ve", "dir", "sen", "o", "ki", "den", "dan", "içinde", "biz", "ben", "bir", "bu", "için"]),
+            "fil": new Set(["at", "ay", "ikaw", "siya", "na", "ng", "sa", "tayo", "kami", "ako", "ang", "mga", "hindi"]),
+            // 依然保留 zh 和 yue，用于它们和其他带有汉字的语种（如日语 ja）发生碰撞时的特征计分
+            "zh": new Set(["的", "了", "是", "我", "他", "她", "在", "有", "和", "就", "不", "也", "都", "这", "很", "个"]),
+            "yue": new Set(["嘅", "喺", "佢", "哋", "唔", "冇", "咗", "咩", "睇", "俾", "嚟", "諗", "嘢", "係", "咁", "啲"])
+        };
+
+        let nativeScore = 0;
+        let targetScore = 0;
+
+        const nativeDict = stopWords[baseNative] || new Set();
+        const targetDict = stopWords[baseTarget] || new Set();
+
+        if (nativeDict.size > 0 || targetDict.size > 0) {
+            for (const word of words) {
+                if (nativeDict.has(word)) nativeScore++;
+                if (targetDict.has(word)) targetScore++;
+            }
+            for (const char of cjkChars) {
+                if (nativeDict.has(char)) nativeScore++;
+                if (targetDict.has(char)) targetScore++;
+            }
+        }
+
+        // 3. 决胜逻辑
+        if (nativeScore > targetScore) return nativeCode;
+        if (targetScore > nativeScore) return targetCode;
+        
+        // 4. 兜底方案
+        return targetCode;
+    }
+
     function playLastTutorMessage(textOverride = null) {
         if (!('speechSynthesis' in window)) return;
         
@@ -252,23 +361,38 @@
             rawText = validTurns[validTurns.length - 1].tutor;
         }
         
-        const sentences = rawText.match(/[^。！？.!?\n\r]+[。！？.!?\n\r]*/g) || [rawText];
+        // 1. 先进行全局清洗，确保成对的标点（如括号）被正确提取并替换为停顿逗号
+        const sanitizedFullText = sanitizeTextForTTS(rawText);
+        
+        // 2. 扩充切句标点符：加入 LLM 高频教学符号
+        // [^...] 匹配非标点内容，[...] 匹配末尾的标点
+        const splitRegex = /[^。！？.!?\n\r→：:；;—=]+[。！？.!?\n\r→：:；;—=]*/g;
+        const sentences = sanitizedFullText.match(splitRegex) || [sanitizedFullText];
+        
         const currentTargetLang = targetLangSelect.value;
-        const langMap = { "zh": "zh-CN", "en": "en-US", "fr": "fr-FR", "ja": "ja-JP", "es": "es-ES", "ru": "ru-RU", "ar": "ar-SA" };
+        const langMap = { 
+            "zh": "zh-CN", "yue": "zh-HK", "en": "en-US", "fr": "fr-FR", "ja": "ja-JP", 
+            "es": "es-ES", "ru": "ru-RU", "ar": "ar-SA", "de": "de-DE", "pt": "pt-PT", 
+            "id": "id-ID", "it": "it-IT", "ko": "ko-KR", "th": "th-TH", "vi": "vi-VN", 
+            "tr": "tr-TR", "hi": "hi-IN", "ms": "ms-MY", "nl": "nl-NL", "sv": "sv-SE", 
+            "da": "da-DK", "fi": "fi-FI", "pl": "pl-PL", "cs": "cs-CZ", "fil": "fil-PH", 
+            "fa": "fa-IR", "el": "el-GR", "hu": "hu-HU", "mk": "mk-MK", "ro": "ro-RO" 
+        };
         
         sentences.forEach(sentence => {
-            const cleanSentence = sanitizeTextForTTS(sentence);
-            if (cleanSentence) {
-                let mappedLang = langMap[currentTargetLang] || currentTargetLang;
+            // 去除切分后首尾可能残留的空格，避免空句入列
+            const cleanSentence = sentence.trim(); 
+            
+            if (cleanSentence && cleanSentence !== ',') {
+                let detectedBaseLang = currentTargetLang;
                 
-                // 🎯 物理语种判定：母语辅助开启，且检测到中文字符时，强制切换为中文引擎
+                // 🎯 物理语种判定：母语辅助开启
                 if (isNativeAllowed) {
-                    if (/[\u4e00-\u9fa5]/.test(cleanSentence)) {
-                        mappedLang = 'zh-CN';
-                    }
+                    detectedBaseLang = detectBinaryLanguage(cleanSentence, nativeLang, currentTargetLang);
                 }
-                
-                ttsQueue.push({ text: cleanSentence, lang: mappedLang });
+
+                const mappedLangCode = langMap[detectedBaseLang] || detectedBaseLang;
+                ttsQueue.push({ text: cleanSentence, lang: mappedLangCode });
             }
         });
 
@@ -290,7 +414,8 @@
         const nativeUI = localStorage.getItem('nativeLangPref') || 'zh';
         if (window.applyUILanguage) window.applyUILanguage(nativeUI);
         if (nativeUI) nativeLang = nativeUI;
-        updateNativeToggleUI(); 
+        
+        syncNativeToggleState(); 
         
         const savedHistory = localStorage.getItem('tutorQueueHistory');
         if (savedHistory) {
@@ -324,13 +449,35 @@
         }
     }
     
+    function syncNativeToggleState() {
+        const currentTarget = targetLangSelect.value;
+        const currentNative = nativeLang; // 当前 UI 的真实母语 (例如 'zh')
+
+        if (currentTarget === currentNative) {
+            // 物理锁定：目标语和母语一致，强行置灰按钮，状态强制为 false
+            allowNativeToggle.disabled = true;
+            isNativeAllowed = false;
+            updateNativeToggleUI();
+        } else {
+            // 解除锁定：恢复按钮可用性
+            allowNativeToggle.disabled = false;
+            // 极其贴心的细节：不要死板地设为 false，而是从本地缓存恢复用户原本的偏好
+            isNativeAllowed = localStorage.getItem('tutorNativeAllowed') === 'true';
+            updateNativeToggleUI();
+        }
+    }
+
     allowNativeToggle.addEventListener('click', () => {
         isNativeAllowed = !isNativeAllowed;
         localStorage.setItem('tutorNativeAllowed', isNativeAllowed);
         updateNativeToggleUI();
     });
 
-    targetLangSelect.addEventListener('change', (e) => localStorage.setItem('tutorLangPref', e.target.value));
+    targetLangSelect.addEventListener('change', (e) => {
+        localStorage.setItem('tutorLangPref', e.target.value);
+        syncNativeToggleState(); // 瞬间联动检查
+    });
+
     function syncHistory() { localStorage.setItem('tutorQueueHistory', JSON.stringify(tutorHistory)); }
 
     function renderChat() {
