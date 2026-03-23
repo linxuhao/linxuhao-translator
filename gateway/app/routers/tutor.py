@@ -92,7 +92,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         
         # 🎯 核心逻辑：双语平等权限释放
         if allow_native:
-            native_rule = f"【双语平等切换】：每次教新词/句子都要用{native_lang_full_name}解释一遍。每次提要求和问问题都要用{native_lang_full_name}解释一遍。其他内容使用{target_lang_full_name}回复。不要有任何强迫用户只听外语的执念。"
+            native_rule = f"【双语平等切换】：每次教新词/句子都要用{native_lang_full_name}解释一遍。每次对话必须先用 {target_lang_full_name} 说出台词或问题，然后紧跟一句完整的 {native_lang_full_name} 翻译。当用户发音、语法或用词错误时，必须用 {native_lang_full_name} 解释为什么错，并告诉他正确的 {target_lang_full_name} 怎么说。当用户沉默或表示听不懂时，必须直接用 {native_lang_full_name} 安慰他，并用 {native_lang_full_name} 给出下一步怎么回答的提示。当用户说对时，必须只用纯 {target_lang_full_name} 给出极简短的肯定（例如：Perfect! / Très bien! / 正解!），此场景绝对不要翻译。不要有任何强迫用户只听外语的执念。"
         else:
             native_rule = f"【纯净外语环境】：你必须且只能使用{target_lang_full_name}回复，绝对严禁使用{native_lang_full_name}。"
 
@@ -101,7 +101,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
 规则：
 1. {native_rule}
 2. 每次回复要极度简短、口语化，像真人在微信聊天（控制在1-3句话内）。
-3. ⚠️【跨语种声学纠错】：用户的输入来自ASR，中外语混讲时极易产生荒谬的音译错误（例如把法语 'Bonjour' 强行听成中文的 '分数' 或 '松鼠'）。当遇到极其突兀的中文词汇时，务必在脑内将其转化为拼音，反推发音最接近的{target_lang_full_name}单词，完成心理纠错后再自然回复。
+3. ⚠️【跨语种声学纠错】：用户的输入来自ASR，中外语混讲时极易产生荒谬的音译错误（例如把法语 'Bonjour' 强行听成中文的 '分数' 或 '松鼠'）。当遇到极其突兀的中文词汇时，务必在脑内将其转化为读音，反推发音最接近的{target_lang_full_name}单词，完成心理纠错后再自然回复。
 4. 如果用户的表达有语法错误，极其简短地纠正一下，然后继续引导对话。
 5. 如果用户的母语和你的语言一样，那你们就是在练习口语
 6. 只输出人类能直接读出来的纯文本对话。"""
@@ -124,7 +124,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         # ----------------------------------------
         # Step 3: 请求大模型进行流式对话
         # ----------------------------------------
-        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.5, "max_tokens": 512}
+        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.5, "max_tokens": 1024}
 
         t_llm_start = time.time()
         full_reply_text = ""

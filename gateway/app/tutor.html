@@ -155,346 +155,363 @@
     </div>
     <script src="/resources/i18n.js?v=1.2"></script>
     <script>
+    // 🎯 核心状态：聊天记录数组
+    let tutorHistory = []; 
+    const MAX_HISTORY_TURNS = 10; 
 
-        // 🎯 核心状态：聊天记录数组 (结构: {user: "...", tutor: "..."})
-        let tutorHistory = []; 
-        const MAX_HISTORY_TURNS = 10; // 滑动窗口限制：物理防御显存溢出
+    let audioContext, analyser, microphone, mediaRecorder, currentStream = null;
+    let isVadActive = false, isRecordingChunk = false;
+    let audioChunks = [], silenceStartTime = 0, recordStartTime = 0, animationFrameId;
 
-        let audioContext, analyser, microphone, mediaRecorder, currentStream = null;
-        let isVadActive = false, isRecordingChunk = false;
-        let audioChunks = [], silenceStartTime = 0, recordStartTime = 0, animationFrameId;
+    const VAD_NORMAL_THRESHOLD = 0.03;  
+    const VAD_STRICT_THRESHOLD = 0.09;  
+    const SILENCE_NORMAL = 1200;    
+    const SILENCE_EAGER = 600;      
+    const EAGER_TRIGGER_TIME = 3000;
+    const MAX_RECORD_LIMIT = 10000; 
 
-        const VAD_THRESHOLD = 0.02;     
-        const SILENCE_NORMAL = 1200;    
-        const SILENCE_EAGER = 600;      
-        const EAGER_TRIGGER_TIME = 3000;
-        const MAX_RECORD_LIMIT = 10000; 
+    const targetLangSelect = document.getElementById('targetLang');
+    const allowNativeToggle = document.getElementById('allowNativeToggle');
+    let nativeLang = 'zh';
+    let isNativeAllowed = localStorage.getItem('tutorNativeAllowed') === 'true';
+    const chatList = document.getElementById('chatList');
+    const vadToggleBtn = document.getElementById('vadToggleBtn');
+    const statusText = document.getElementById('statusText');
+    const vadLevelBar = document.getElementById('vadLevelBar');
+    const vadLevelFill = document.getElementById('vadLevelFill');
 
-        const targetLangSelect = document.getElementById('targetLang');
-        const allowNativeToggle = document.getElementById('allowNativeToggle');
-        let nativeLang = 'zh';
-        let isNativeAllowed = localStorage.getItem('tutorNativeAllowed') === 'true';
-        const chatList = document.getElementById('chatList');
-        const vadToggleBtn = document.getElementById('vadToggleBtn');
-        const statusText = document.getElementById('statusText');
-        const vadLevelBar = document.getElementById('vadLevelBar');
-        const vadLevelFill = document.getElementById('vadLevelFill');
+    // ========================================================
+    // 🎯 纯前端本地 TTS 引擎核心逻辑 (原生 API + 切句队列)
+    // ========================================================
+    const ttsQueue = [];
+    let isTTSPlaying = false;
 
-        // --- UI 初始化 ---
-        function initTutorUI() {
-            // Tutor 的学习语言下拉框 (不受 UI 语言影响)
-            targetLangSelect.innerHTML = SUPPORTED_LANGS.map(l => `<option value="${l.v}">${l.n}</option>`).join('');
-            const savedTutorLang = localStorage.getItem('tutorLangPref');
-            if (savedTutorLang) targetLangSelect.value = savedTutorLang;
-            
-            // 🎯 从全局读取 Native UI 偏好 (用户在同传页面选的语言)
-            const nativeUI = localStorage.getItem('nativeLangPref') || 'zh';
-            if (window.applyUILanguage) window.applyUILanguage(nativeUI);
-            if (nativeUI) nativeLang = nativeUI;
-            updateNativeToggleUI(); // 🎯 页面加载时同步 UI 状态
-            
-            const savedHistory = localStorage.getItem('tutorQueueHistory');
-            if (savedHistory) {
-                try { tutorHistory = JSON.parse(savedHistory); renderChat(); } 
-                catch (e) { tutorHistory = []; }
-            }
-            
-            fetch('/api/me').then(res => res.json()).then(data => {
-                if(data.role === 'admin') document.getElementById('adminTab').style.display = 'flex';
-            }).catch(()=>{});
-        }
+    // 1. 深度正则清洗
+    function sanitizeTextForTTS(rawText) {
+        return rawText
+            .replace(/\p{Extended_Pictographic}/gu, '') 
+            .replace(/[_*~～]/g, '') 
+            .replace(/（[^）]*）|\([^)]*\)/g, '') 
+            .replace(/→/g, ', ') 
+            .replace(/—+/g, ', ') 
+            .trim();
+    }
+
+    // 2. 本地发音队列状态机 (防御长文本中断 Bug)
+    function processTTSQueue() {
+        if (!('speechSynthesis' in window)) return;
         
-        function updateStatusUI(statusKey) {
-            if (typeof I18N_DICT === 'undefined') return;
-            const dict = I18N_DICT[nativeLang] || I18N_DICT["zh"];
-            if (dict[statusKey]) {
-                statusText.innerText = dict[statusKey];
+        if (ttsQueue.length === 0) {
+            isTTSPlaying = false;
+            if (isVadActive) { 
+                updateStatusUI('status_listen');
+                vadLevelBar.style.display = 'block'; 
+            } else { 
+                updateStatusUI('status_sleep');
             }
+            return;
         }
 
-        function updateNativeToggleUI() {
-            allowNativeToggle.classList.toggle('active', isNativeAllowed);
-            const statusKey = isNativeAllowed ? 'btn_native_on' : 'btn_native_off';
-            allowNativeToggle.setAttribute('data-i18n', statusKey);
-            
-            // 🎯 O(1) 物理直达更新，杜绝全局重绘浪费 CPU 算力
-            if (typeof I18N_DICT !== 'undefined') {
-                const dict = I18N_DICT[nativeLang] || I18N_DICT["en"] || I18N_DICT["zh"];
-                if (dict[statusKey]) {
-                    allowNativeToggle.innerText = dict[statusKey];
-                }
-            }
-        }
-        allowNativeToggle.addEventListener('click', () => {
-            isNativeAllowed = !isNativeAllowed;
-            localStorage.setItem('tutorNativeAllowed', isNativeAllowed);
-            updateNativeToggleUI();
-        });
+        isTTSPlaying = true;
+        updateStatusUI('status_speak_tutor');
+        vadLevelBar.style.display = 'none'; 
 
-        targetLangSelect.addEventListener('change', (e) => localStorage.setItem('tutorLangPref', e.target.value));
-        function syncHistory() { localStorage.setItem('tutorQueueHistory', JSON.stringify(tutorHistory)); }
-
-        // --- 聊天气泡渲染引擎 ---
-        function renderChat() {
-            // 清理旧消息，保留 system-hint
-            Array.from(chatList.children).forEach(child => { if (!child.classList.contains('system-hint')) child.remove(); });
-            
-            tutorHistory.forEach((turn) => {
-                if (turn.user) {
-                    const uDiv = document.createElement('div'); uDiv.className = 'message-row user';
-                    uDiv.innerHTML = `<div class="bubble">${turn.user}</div>`;
-                    chatList.appendChild(uDiv);
-                }
-                if (turn.tutor) {
-                    const tDiv = document.createElement('div'); tDiv.className = 'message-row tutor';
-                    tDiv.innerHTML = `<div class="bubble">${turn.tutor}</div>`;
-                    chatList.appendChild(tDiv);
-                }
-            });
-            chatList.scrollTop = chatList.scrollHeight; // 聊天流需要触底滚动 (Top-Down 插入，Bottom Focus)
+        const { text, lang } = ttsQueue.shift();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = lang;
+        
+        // 苹果 iOS 必须的 Hack：稍微调低一点语速以提升外语拟真度
+        if (lang !== 'zh-CN') {
+            utterance.rate = 0.95; 
         }
 
-        // --- TTS 引擎 ---
-        function sanitizeTextForTTS(rawText) {
-            return rawText
-                // 清除所有现代 Emoji 字符区块 (Extended Pictographic)
-                .replace(/\p{Extended_Pictographic}/gu, '')
-                // 清除波浪号、下划线、星号等无发音符号
-                .replace(/[_*~～]/g, '')
-                // 将长破折号转化为逗号，迫使 TTS 引擎停顿换气，而不是读出 "dash dash"
-                .replace(/→—+/g, ', ')
-                // 清理多余空格
-                .trim();
-        }
+        utterance.onend = () => {
+            processTTSQueue(); 
+        };
 
-        function playLastTutorMessage() {
-            if (!('speechSynthesis' in window)) return;
-            window.speechSynthesis.cancel();
-            
+        utterance.onerror = (e) => {
+            console.warn("本地 TTS 播放跳过:", e);
+            processTTSQueue();
+        };
+
+        window.speechSynthesis.speak(utterance);
+    }
+
+    // 3. 混合语种物理切句与入队
+    function playLastTutorMessage(textOverride = null) {
+        if (!('speechSynthesis' in window)) return;
+        
+        window.speechSynthesis.cancel();
+        ttsQueue.length = 0;
+        isTTSPlaying = false;
+
+        let rawText = textOverride;
+        if (!rawText) {
             const validTurns = tutorHistory.filter(t => t.tutor && t.tutor.length > 0);
             if (validTurns.length === 0) return;
-            
-            const rawText = validTurns[validTurns.length - 1].tutor;
-            const cleanText = sanitizeTextForTTS(rawText); 
-            
-            if (cleanText.length === 0) return; 
-            
-            const targetLangCode = targetLangSelect.value;
-            const utterance = new SpeechSynthesisUtterance(cleanText); 
-            
-            const langMap = { "zh": "zh-CN", "en": "en-US", "fr": "fr-FR", "ja": "ja-JP", "es": "es-ES" };
-            utterance.lang = langMap[targetLangCode] || targetLangCode;
-            
-            // 🎯 开始发音，切入保守阈值模式
-            utterance.onstart = () => { 
-                isTTSPlaying = true;
-                updateStatusUI('status_speak_tutor');; 
-                vadLevelBar.style.display = 'none'; 
-            };
-            
-            // 🎯 发音结束，恢复灵敏阈值模式
-            utterance.onend = () => { 
-                isTTSPlaying = false;
-                if (isVadActive) { 
-                    updateStatusUI('status_listen');
-                    vadLevelBar.style.display = 'block'; 
-                } else { 
-                    updateStatusUI('status_sleep');
-                }
-            };
-            
-            // 🎯 防御性兜底：如果被打断或出错，也要重置状态
-            utterance.onerror = () => { isTTSPlaying = false; };
-            
-            window.speechSynthesis.speak(utterance);
+            rawText = validTurns[validTurns.length - 1].tutor;
         }
-
-        document.getElementById('playSelectedBtn').addEventListener('click', playLastTutorMessage);
         
-        document.getElementById('clearBtn').addEventListener('click', () => {
-            if (tutorHistory.length === 0) return;
-            if (confirm("确认清空当前外教的记忆？")) {
-                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-                tutorHistory = []; syncHistory(); renderChat();
-                if (isVadActive) { updateStatusUI('status_listen'); vadLevelBar.style.display = 'block'; } 
-                else { updateStatusUI('status_sleep'); vadLevelBar.style.display = 'none'; }
+        const sentences = rawText.match(/[^。！？.!?]+[。！？.!?]*/g) || [rawText];
+        const currentTargetLang = targetLangSelect.value;
+        const langMap = { "zh": "zh-CN", "en": "en-US", "fr": "fr-FR", "ja": "ja-JP", "es": "es-ES", "ru": "ru-RU", "ar": "ar-SA" };
+        
+        sentences.forEach(sentence => {
+            const cleanSentence = sanitizeTextForTTS(sentence);
+            if (cleanSentence) {
+                let mappedLang = langMap[currentTargetLang] || currentTargetLang;
+                
+                // 🎯 物理语种判定：母语辅助开启，且检测到中文字符时，强制切换为中文引擎
+                if (isNativeAllowed && nativeLang === 'zh') {
+                    if (/[\u4e00-\u9fa5]/.test(cleanSentence)) {
+                        mappedLang = 'zh-CN';
+                    }
+                }
+                
+                ttsQueue.push({ text: cleanSentence, lang: mappedLang });
             }
         });
 
-        // --- Wake Lock ---
-        let wakeLock = null;
-        async function requestWakeLock() { if ('wakeLock' in navigator) try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} }
-        function releaseWakeLock() { if (wakeLock) wakeLock.release().then(() => wakeLock = null); }
-
-        // --- VAD 采集与状态机 ---
-        async function toggleVAD() {
-            if (isVadActive) {
-                isVadActive = false; vadToggleBtn.classList.remove('active'); updateStatusUI('status_sleep'); vadLevelBar.style.display = 'none';
-                cancelAnimationFrame(animationFrameId);
-                if (isRecordingChunk) { mediaRecorder.stop(); isRecordingChunk = false; }
-                if (audioContext) audioContext.suspend();
-                if (currentStream) { currentStream.getTracks().forEach(track => track.stop()); currentStream = null; }
-                releaseWakeLock(); return;
-            }
-            try {
-                currentStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                analyser = audioContext.createAnalyser(); analyser.fftSize = 512;
-                microphone = audioContext.createMediaStreamSource(currentStream); microphone.connect(analyser);
-
-                let options = { mimeType: 'audio/webm' }; if (!MediaRecorder.isTypeSupported('audio/webm')) options = { mimeType: 'audio/mp4' }; 
-                mediaRecorder = new MediaRecorder(currentStream, options);
-                mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
-                mediaRecorder.onstop = () => { const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType }); audioChunks = []; sendTutorStream(blob); };
-
-                isVadActive = true; vadToggleBtn.classList.add('active'); updateStatusUI('status_listen'); vadLevelBar.style.display = 'block';
-                await requestWakeLock(); detectAudioLoop();
-            } catch (err) { alert("麦克风权限被拒或设备异常"); }
+        // 启动队列播报
+        if (ttsQueue.length > 0) {
+            processTTSQueue();
         }
-        vadToggleBtn.addEventListener('click', toggleVAD);
+    }
 
+    // ========================================================
+    // --- UI 与 VAD 麦克风控制逻辑 ---
+    // ========================================================
+    
+    function initTutorUI() {
+        targetLangSelect.innerHTML = SUPPORTED_LANGS.map(l => `<option value="${l.v}">${l.n}</option>`).join('');
+        const savedTutorLang = localStorage.getItem('tutorLangPref');
+        if (savedTutorLang) targetLangSelect.value = savedTutorLang;
         
-        // 🎯 档位 1: 平时倾听 (过滤背景闲聊)
-        // 0.02: 极度灵敏（连呼吸声都能触发）
-        // 0.03 - 0.04: 推荐值（能有效过滤两米外的旁人聊天声，但你能轻松触发）
-        const VAD_NORMAL_THRESHOLD = 0.035;  
-
-        // 🎯 档位 2: TTS 播放时 (防御尾音残影与强噪音)
-        // 0.06: 适中（能防住大部分回声，但防不住你刚说完的拖长尾音）
-        // 0.08 - 0.10: 推荐值（物理级装甲，必须你用正常偏大的音量、靠近麦克风明确说 "Wait/No" 才能击穿）
-        // 0.15: 绝对防御（需要你大吼才能打断）
-        const VAD_STRICT_THRESHOLD = 0.09;  
+        const nativeUI = localStorage.getItem('nativeLangPref') || 'zh';
+        if (window.applyUILanguage) window.applyUILanguage(nativeUI);
+        if (nativeUI) nativeLang = nativeUI;
+        updateNativeToggleUI(); 
         
-        let isTTSPlaying = false;
+        const savedHistory = localStorage.getItem('tutorQueueHistory');
+        if (savedHistory) {
+            try { tutorHistory = JSON.parse(savedHistory); renderChat(); } 
+            catch (e) { tutorHistory = []; }
+        }
+        
+        fetch('/api/me').then(res => res.json()).then(data => {
+            if(data.role === 'admin') document.getElementById('adminTab').style.display = 'flex';
+        }).catch(()=>{});
+    }
+    
+    function updateStatusUI(statusKey) {
+        if (typeof I18N_DICT === 'undefined') return;
+        const dict = I18N_DICT[nativeLang] || I18N_DICT["zh"];
+        if (dict[statusKey]) {
+            statusText.innerText = dict[statusKey];
+        }
+    }
 
-        // 2. 🎯 重写 VAD 循环，应用动态阈值
-        function detectAudioLoop() {
-            if (!isVadActive) return;
-            const pcmData = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(pcmData);
-            let sumSquares = 0.0; for (const amp of pcmData) sumSquares += amp * amp;
-            const rms = Math.sqrt(sumSquares / pcmData.length);
-            
-            vadLevelFill.style.width = Math.min(100, rms * 1000) + '%';
-            
-            const now = Date.now();
-            let currentSilenceLimit = (isRecordingChunk && (now - recordStartTime > EAGER_TRIGGER_TIME)) ? SILENCE_EAGER : SILENCE_NORMAL;
-
-            // 🎯 核心逻辑：动态判断当前应该用哪个阈值
-            const activeThreshold = isTTSPlaying ? VAD_STRICT_THRESHOLD : VAD_NORMAL_THRESHOLD;
-
-            if (rms > activeThreshold) {
-                silenceStartTime = 0; 
-                if (!isRecordingChunk) { 
-                    
-                    // 💥 真实打断发生！如果 TTS 还在播，瞬间将其物理静音
-                    if (isTTSPlaying && 'speechSynthesis' in window) {
-                        window.speechSynthesis.cancel();
-                        isTTSPlaying = false; 
-                        console.log("🌊 用户用高音量击穿阈值，外教已被物理静音");
-                    }
-
-                    isRecordingChunk = true; 
-                    recordStartTime = now; 
-                    mediaRecorder.start(); 
-                    updateStatusUI('status_capture'); 
-                }
-            } else if (isRecordingChunk) {
-                if (silenceStartTime === 0) silenceStartTime = now;
-                if (now - silenceStartTime > currentSilenceLimit) { 
-                    isRecordingChunk = false; 
-                    mediaRecorder.stop(); 
-                    updateStatusUI('status_listen'); 
-                }
+    function updateNativeToggleUI() {
+        allowNativeToggle.classList.toggle('active', isNativeAllowed);
+        const statusKey = isNativeAllowed ? 'btn_native_on' : 'btn_native_off';
+        allowNativeToggle.setAttribute('data-i18n', statusKey);
+        
+        if (typeof I18N_DICT !== 'undefined') {
+            const dict = I18N_DICT[nativeLang] || I18N_DICT["en"] || I18N_DICT["zh"];
+            if (dict[statusKey]) {
+                allowNativeToggle.innerText = dict[statusKey];
             }
-            if (isRecordingChunk && (now - recordStartTime > MAX_RECORD_LIMIT)) { 
+        }
+    }
+    
+    allowNativeToggle.addEventListener('click', () => {
+        isNativeAllowed = !isNativeAllowed;
+        localStorage.setItem('tutorNativeAllowed', isNativeAllowed);
+        updateNativeToggleUI();
+    });
+
+    targetLangSelect.addEventListener('change', (e) => localStorage.setItem('tutorLangPref', e.target.value));
+    function syncHistory() { localStorage.setItem('tutorQueueHistory', JSON.stringify(tutorHistory)); }
+
+    function renderChat() {
+        Array.from(chatList.children).forEach(child => { if (!child.classList.contains('system-hint')) child.remove(); });
+        tutorHistory.forEach((turn) => {
+            if (turn.user) {
+                const uDiv = document.createElement('div'); uDiv.className = 'message-row user';
+                uDiv.innerHTML = `<div class="bubble">${turn.user}</div>`;
+                chatList.appendChild(uDiv);
+            }
+            if (turn.tutor) {
+                const tDiv = document.createElement('div'); tDiv.className = 'message-row tutor';
+                tDiv.innerHTML = `<div class="bubble">${turn.tutor}</div>`;
+                chatList.appendChild(tDiv);
+            }
+        });
+        chatList.scrollTop = chatList.scrollHeight; 
+    }
+
+    document.getElementById('playSelectedBtn').addEventListener('click', () => playLastTutorMessage());
+    
+    document.getElementById('clearBtn').addEventListener('click', () => {
+        if (tutorHistory.length === 0) return;
+        if (confirm("确认清空当前外教的记忆？")) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+            }
+            ttsQueue.length = 0;
+            isTTSPlaying = false;
+
+            tutorHistory = []; syncHistory(); renderChat();
+            if (isVadActive) { updateStatusUI('status_listen'); vadLevelBar.style.display = 'block'; } 
+            else { updateStatusUI('status_sleep'); vadLevelBar.style.display = 'none'; }
+        }
+    });
+
+    let wakeLock = null;
+    async function requestWakeLock() { if ('wakeLock' in navigator) try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} }
+    function releaseWakeLock() { if (wakeLock) wakeLock.release().then(() => wakeLock = null); }
+
+    async function toggleVAD() {
+        if (isVadActive) {
+            isVadActive = false; vadToggleBtn.classList.remove('active'); updateStatusUI('status_sleep'); vadLevelBar.style.display = 'none';
+            cancelAnimationFrame(animationFrameId);
+            if (isRecordingChunk) { mediaRecorder.stop(); isRecordingChunk = false; }
+            if (audioContext) audioContext.suspend();
+            if (currentStream) { currentStream.getTracks().forEach(track => track.stop()); currentStream = null; }
+            releaseWakeLock(); return;
+        }
+        try {
+            currentStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            analyser = audioContext.createAnalyser(); analyser.fftSize = 512;
+            microphone = audioContext.createMediaStreamSource(currentStream); microphone.connect(analyser);
+
+            let options = { mimeType: 'audio/webm' }; if (!MediaRecorder.isTypeSupported('audio/webm')) options = { mimeType: 'audio/mp4' }; 
+            mediaRecorder = new MediaRecorder(currentStream, options);
+            mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+            mediaRecorder.onstop = () => { const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType }); audioChunks = []; sendTutorStream(blob); };
+
+            isVadActive = true; vadToggleBtn.classList.add('active'); updateStatusUI('status_listen'); vadLevelBar.style.display = 'block';
+            await requestWakeLock(); detectAudioLoop();
+        } catch (err) { alert("麦克风权限被拒或设备异常"); }
+    }
+    vadToggleBtn.addEventListener('click', toggleVAD);
+
+    function detectAudioLoop() {
+        if (!isVadActive) return;
+        const pcmData = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(pcmData);
+        let sumSquares = 0.0; for (const amp of pcmData) sumSquares += amp * amp;
+        const rms = Math.sqrt(sumSquares / pcmData.length);
+        
+        vadLevelFill.style.width = Math.min(100, rms * 1000) + '%';
+        
+        const now = Date.now();
+        let currentSilenceLimit = (isRecordingChunk && (now - recordStartTime > EAGER_TRIGGER_TIME)) ? SILENCE_EAGER : SILENCE_NORMAL;
+        const activeThreshold = isTTSPlaying ? VAD_STRICT_THRESHOLD : VAD_NORMAL_THRESHOLD;
+
+        if (rms > activeThreshold) {
+            silenceStartTime = 0; 
+            if (!isRecordingChunk) { 
+                if (isTTSPlaying) {
+                    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                    ttsQueue.length = 0; 
+                    isTTSPlaying = false; 
+                }
+                isRecordingChunk = true; 
+                recordStartTime = now; 
+                mediaRecorder.start(); 
+                updateStatusUI('status_capture'); 
+            }
+        } else if (isRecordingChunk) {
+            if (silenceStartTime === 0) silenceStartTime = now;
+            if (now - silenceStartTime > currentSilenceLimit) { 
                 isRecordingChunk = false; 
                 mediaRecorder.stop(); 
-                silenceStartTime = 0; 
+                updateStatusUI('status_listen'); 
             }
-            animationFrameId = requestAnimationFrame(detectAudioLoop);
         }
+        if (isRecordingChunk && (now - recordStartTime > MAX_RECORD_LIMIT)) { 
+            isRecordingChunk = false; 
+            mediaRecorder.stop(); 
+            silenceStartTime = 0; 
+        }
+        animationFrameId = requestAnimationFrame(detectAudioLoop);
+    }
 
-        // --- 核心: 外教专线 SSE 请求 ---
-        async function sendTutorStream(audioBlob) {
-            const formData = new FormData();
-            formData.append("audio_file", audioBlob, "chunk.webm");
-            formData.append("target_lang", targetLangSelect.value); 
-            formData.append("native_lang", nativeLang); 
-            formData.append("allow_native", isNativeAllowed ? "true" : "false");
+    async function sendTutorStream(audioBlob) {
+        const formData = new FormData();
+        formData.append("audio_file", audioBlob, "chunk.webm");
+        formData.append("target_lang", targetLangSelect.value); 
+        formData.append("native_lang", nativeLang); 
+        formData.append("allow_native", isNativeAllowed ? "true" : "false");
 
-            // 🎯 物理截断：严格限制发送给后端的 Context Window
-            const apiHistory = [];
-            const recentTurns = tutorHistory.slice(-MAX_HISTORY_TURNS);
-            recentTurns.forEach(turn => {
-                if (turn.user) apiHistory.push({ role: "user", content: turn.user });
-                if (turn.tutor) apiHistory.push({ role: "assistant", content: turn.tutor });
-            });
-            formData.append("chat_history", JSON.stringify(apiHistory));
+        const apiHistory = [];
+        const recentTurns = tutorHistory.slice(-MAX_HISTORY_TURNS);
+        recentTurns.forEach(turn => {
+            if (turn.user) apiHistory.push({ role: "user", content: turn.user });
+            if (turn.tutor) apiHistory.push({ role: "assistant", content: turn.tutor });
+        });
+        formData.append("chat_history", JSON.stringify(apiHistory));
 
-            try {
-                const response = await fetch("/api/tutor/stream", { method: "POST", body: formData });
-                if (!response.ok) return;
+        try {
+            const response = await fetch("/api/tutor/stream", { method: "POST", body: formData });
+            if (!response.ok) return;
 
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder("utf-8");
-                let currentTurn = { user: "", tutor: "" };
-                let domUserBubble = null;
-                let domTutorBubble = null;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder("utf-8");
+            let currentTurn = { user: "", tutor: "" };
+            let domTutorBubble = null;
 
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    
-                    const events = decoder.decode(value, { stream: true }).split("\n\n");
-                    for (const ev of events) {
-                        if (ev.startsWith("data: ")) {
-                            try {
-                                const payload = JSON.parse(ev.slice(6));
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                
+                const events = decoder.decode(value, { stream: true }).split("\n\n");
+                for (const ev of events) {
+                    if (ev.startsWith("data: ")) {
+                        try {
+                            const payload = JSON.parse(ev.slice(6));
+                            
+                            if (payload.event === "start") {
+                                currentTurn.user = payload.original_text;
+                                const uRow = document.createElement('div'); uRow.className = 'message-row user';
+                                uRow.innerHTML = `<div class="bubble">${payload.original_text}</div>`;
+                                chatList.appendChild(uRow);
                                 
-                                if (payload.event === "start") {
-                                    // 1. 创建 User 气泡
-                                    currentTurn.user = payload.original_text;
-                                    const uRow = document.createElement('div'); uRow.className = 'message-row user';
-                                    uRow.innerHTML = `<div class="bubble">${payload.original_text}</div>`;
-                                    chatList.appendChild(uRow);
-                                    
-                                    // 2. 预创建 Tutor 打字机气泡
-                                    const tRow = document.createElement('div'); tRow.className = 'message-row tutor';
-                                    domTutorBubble = document.createElement('div'); domTutorBubble.className = 'bubble';
-                                    domTutorBubble.innerHTML = `<span class="text-content"></span><span class="streaming-cursor"></span>`;
-                                    tRow.appendChild(domTutorBubble);
-                                    chatList.appendChild(tRow);
-                                    chatList.scrollTop = chatList.scrollHeight;
-                                } 
-                                else if (payload.event === "token" && domTutorBubble) {
-                                    currentTurn.tutor += payload.text;
-                                    domTutorBubble.querySelector('.text-content').innerText = currentTurn.tutor;
-                                    chatList.scrollTop = chatList.scrollHeight;
+                                const tRow = document.createElement('div'); tRow.className = 'message-row tutor';
+                                domTutorBubble = document.createElement('div'); domTutorBubble.className = 'bubble';
+                                domTutorBubble.innerHTML = `<span class="text-content"></span><span class="streaming-cursor"></span>`;
+                                tRow.appendChild(domTutorBubble);
+                                chatList.appendChild(tRow);
+                                chatList.scrollTop = chatList.scrollHeight;
+                            } 
+                            else if (payload.event === "token" && domTutorBubble) {
+                                currentTurn.tutor += payload.text;
+                                domTutorBubble.querySelector('.text-content').innerText = currentTurn.tutor;
+                                chatList.scrollTop = chatList.scrollHeight;
+                            }
+                            else if (payload.event === "end") {
+                                if (payload.reason === "empty_audio") return; 
+                                
+                                if (domTutorBubble) {
+                                    const cursor = domTutorBubble.querySelector('.streaming-cursor');
+                                    if (cursor) cursor.remove();
                                 }
-                                else if (payload.event === "end") {
-                                    if (payload.reason === "empty_audio") return; 
-                                    
-                                    // 移除打字机光标
-                                    if (domTutorBubble) {
-                                        const cursor = domTutorBubble.querySelector('.streaming-cursor');
-                                        if (cursor) cursor.remove();
-                                    }
-                                    
-                                    // 压入状态机并持久化
-                                    tutorHistory.push(currentTurn);
-                                    syncHistory();
-                                    
-                                    // 触发 TTS 朗读外教回复
-                                    if ('speechSynthesis' in window) playLastTutorMessage();
-                                }
-                            } catch (err) {}
-                        }
+                                
+                                tutorHistory.push(currentTurn);
+                                syncHistory();
+                                
+                                // 🎯 SSE 结束，触发纯本地分段语种识别与播报
+                                playLastTutorMessage(currentTurn.tutor);
+                            }
+                        } catch (err) {}
                     }
                 }
-            } catch (error) { console.error("Tutor Stream exception:", error); }
-        }
+            }
+        } catch (error) { console.error("Tutor Stream exception:", error); }
+    }
 
-        window.onload = initTutorUI;
-    </script>
+    window.onload = initTutorUI;
+</script>
 </body>
 </html>
