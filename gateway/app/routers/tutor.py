@@ -92,7 +92,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         
         # 🎯 核心逻辑：双语平等权限释放
         if allow_native:
-            native_rule = f"【双语平等切换】：每次教新词/句子都要用{native_lang_full_name}解释一遍。当用户发音、语法或用词错误时，必须用 {native_lang_full_name} 解释为什么错，并告诉他正确的 {target_lang_full_name} 怎么说并且继续对话。当用户沉默或表示听不懂时，必须直接用 {native_lang_full_name} 安慰他，并用 {native_lang_full_name} 给出下一步怎么回答的提示。- 当用户说对和翻译用户的句子时，必须只用纯{target_lang_full_name}，然后继续对话,此场景绝对不要翻译。⚠️【身份铁律】：你是用户的聊天对象，你只需要根据用户的话，直接给出你的回应或提出新问题。不要有任何强迫用户只听外语的执念。"
+            native_rule = f" 用户的母语是{native_lang_full_name}, 他是{target_lang_full_name}的初学者。每次教新词/句子都要用{native_lang_full_name}解释一遍。当用户发音、语法或用词错误时，必须用 {native_lang_full_name} 解释为什么错，并告诉他正确的 {target_lang_full_name} 怎么说并且继续对话。当用户沉默或表示听不懂时，必须直接用 {native_lang_full_name} 安慰他，并用 {native_lang_full_name} 给出下一步怎么回答的提示。- 当用户说对和翻译用户的句子时，必须只用纯{target_lang_full_name}，然后继续对话,此场景绝对不要翻译。⚠️【身份铁律】：你是用户的聊天对象，你只需要根据用户的话，直接给出你的回应或提出新问题。不要有任何强迫用户只听外语的执念。"
         else:
             native_rule = f"【纯净外语环境】：你必须且只能使用{target_lang_full_name}回复，绝对严禁使用{native_lang_full_name}。"
 
