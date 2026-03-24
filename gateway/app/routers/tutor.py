@@ -22,8 +22,7 @@ BRAIN_URL = os.getenv("BRAIN_ENGINE_URL", "http://vllm_qwen:8000/v1/chat/complet
 ASR_URL = os.getenv("ASR_ENGINE_URL", "http://qwen3_asr:8000/v1/chat/completions")
 ASR_MODEL_NAME = os.getenv("ASR_MODEL_NAME", "qwen3-asr") 
 
-# 🎯 外教业务专属算力锁：严格物理隔离，最大并发 16，保护 7900 XTX 显存
-TUTOR_MAX_CONCURRENT = 16
+TUTOR_MAX_CONCURRENT = 32
 tutor_task_queue = asyncio.PriorityQueue()
 
 async def convert_webm_to_wav(audio_bytes: bytes) -> bytes:
