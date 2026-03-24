@@ -195,18 +195,6 @@
     const ttsQueue = [];
     let isTTSPlaying = false;
 
-    // 1. 深度正则清洗
-    function sanitizeTextForTTS(rawText) {
-        return rawText
-            .replace(/\p{Extended_Pictographic}/gu, '') 
-            .replace(/[_*~～]/g, '') 
-            .replace(/（([^）]*)）|\(([^)]*)\)/g, ', $1$2, ')
-            .replace(/→/g, ', ') 
-            .replace(/—+/g, ', ') 
-            .replace(/«»/g, ', ')
-            .trim();
-    }
-
     // 2. 本地发音队列状态机 (防御长文本中断 Bug)
     function processTTSQueue() {
         if (!('speechSynthesis' in window)) return;
@@ -247,39 +235,59 @@
         window.speechSynthesis.speak(utterance);
     }
 
-    // [重构] 新增第 0 层「中粤特攻拦截层」，基于 LLM 简繁输出特征实现 O(1) 的绝对判定
+    function globalPreSanitize(rawText) {
+        if (!rawText) return "";
+        return rawText
+            // 仅将括号内的内容平铺，并加入逗号作为逻辑停顿的占位符
+            .replace(/（([^）]*)）|\(([^)]*)\)/g, ', $1$2, '); 
+    }
+    // 逻辑：极其冷酷。在送入 TTS 发音前，彻底摧毁所有不发音的视觉符号、Markdown 以及残留的标点碎渣
+    function localPostSanitize(chunk) {
+        let clean = chunk
+            .replace(/\p{Extended_Pictographic}/gu, '') // 抹除 Emoji
+            .replace(/[_*~～]/g, '') // 抹除 Markdown 痕迹
+            .replace(/[→—]/g, ', ') // 将视觉引导符转为自然的逗号停顿，引导 TTS 换气
+            .replace(/^[,，、\s]+/, '')
+            .replace(/[,，\s]+$/, '')
+            .trim();
+        
+        return clean.trim();
+    }
 
-    function detectBinaryLanguage(sentence, nativeCode, targetCode) {
+    function formatTutorTextVisually(rawText) {
+        return rawText
+            .replace(/<外[^>]*>/g, '')  // 兼容 <外语> <外文> <外> 等幻觉
+            .replace(/<母[^>]*>/g, '');
+    }
+
+   function verifyAndOverrideLanguage(sentence, tagLang, nativeCode, targetCode) {
         const baseNative = nativeCode.split('-')[0].toLowerCase();
         const baseTarget = targetCode.split('-')[0].toLowerCase();
 
         // 0. 中粤特攻拦截层 (Heuristic Shortcut)
-        // 专门针对 zh vs yue 的对抗场景，利用 LLM 的简繁体生成分布直接一票否决
         if ((baseNative === 'zh' && baseTarget === 'yue') || (baseNative === 'yue' && baseTarget === 'zh')) {
-            // 高频特征池：涵盖了粤语高频词以及最常用的繁体字映射
-            const yueRegex = /[嘅喺佢哋唔冇咗咩睇俾嚟諗嘢係咁啲這個們來沒說麼會樣為現將覺語嗎愛學機動後裡過實對當經種]/;
-            
-            const yueCode = baseNative === 'yue' ? nativeCode : targetCode;
-            const zhCode = baseNative === 'zh' ? nativeCode : targetCode;
-            
-            // 只要包含任何一个繁体/粤字特征，即判定为粤语；否则纯简体默认归属中文
-            return yueRegex.test(sentence) ? yueCode : zhCode;
+            // 增加 CJK 判定，防止混合的一两个英文单词被误杀入特攻逻辑
+            if (/[\u4e00-\u9fa5]/.test(sentence)) {
+                const yueRegex = /[嘅喺佢哋唔冇咗咩睇俾嚟諗嘢係咁啲這個們來沒說麼會樣為現將覺語嗎愛學機動後裡過實對當經種]/;
+                const yueCode = baseNative === 'yue' ? nativeCode : targetCode;
+                const zhCode = baseNative === 'zh' ? nativeCode : targetCode;
+                return yueRegex.test(sentence) ? yueCode : zhCode;
+            }
         }
 
         // 1. 绝对物理防御 (Unicode Blocks)
-        // 跨语系对抗（如 zh vs en, ar vs ru）
         const scriptRegexes = {
             zh: /[\u4e00-\u9fa5]/,           
             yue: /[\u4e00-\u9fa5]/,          
-            ja: /[\u3040-\u30ff]/,           // 日文平假名/片假名
-            ko: /[\uac00-\ud7af\u1100-\u11ff]/, // 韩文谚文
-            ar: /[\u0600-\u06FF]/,           // 阿拉伯文
-            fa: /[\u0600-\u06FF]/,           // 波斯文
-            ru: /[\u0400-\u04FF]/,           // 俄文
-            mk: /[\u0400-\u04FF]/,           // 马其顿文
-            th: /[\u0E00-\u0E7F]/,           // 泰文
-            el: /[\u0370-\u03FF]/,           // 希腊文
-            hi: /[\u0900-\u097F]/            // 印地文
+            ja: /[\u3040-\u30ff]/,           
+            ko: /[\uac00-\ud7af\u1100-\u11ff]/, 
+            ar: /[\u0600-\u06FF]/,           
+            fa: /[\u0600-\u06FF]/,           
+            ru: /[\u0400-\u04FF]/,           
+            mk: /[\u0400-\u04FF]/,           
+            th: /[\u0E00-\u0E7F]/,           
+            el: /[\u0370-\u03FF]/,           
+            hi: /[\u0900-\u097F]/            
         };
 
         const matchNativeScript = scriptRegexes[baseNative] ? scriptRegexes[baseNative].test(sentence) : false;
@@ -288,15 +296,25 @@
         if (matchNativeScript && !matchTargetScript) return nativeCode;
         if (matchTargetScript && !matchNativeScript) return targetCode;
 
+        // 🎯 [新增] 终极物理拦截：纯净度反转
+        const hasCJK = /[\u4e00-\u9fa5\u3040-\u30ff]/.test(sentence);
+        const hasLatin = /[a-zA-ZÀ-ÿ]/.test(sentence);
+        const isNatCJK = baseNative === 'zh' || baseNative === 'ja' || baseNative === 'yue';
+        const isTgtCJK = baseTarget === 'zh' || baseTarget === 'ja' || baseTarget === 'yue';
+
+        // 如果母语是中/日/粤，但在 <母语> 标签的切块里完全找不到 CJK 字符，且存在拉丁字母或目标语字符
+        // 瞬间无视 LLM 的 Tag，强制路由给目标外语！
+        if (isNatCJK && !isTgtCJK && !hasCJK && (hasLatin || matchTargetScript)) {
+            return targetCode;
+        }
 
         // 2. 双轨特征提取引擎 (Dual-track Tokenization)
-        // 同源语系对抗（如 es vs pt, zh vs ja 且同含汉字时）
         const words = sentence.toLowerCase().match(/[\p{L}\p{M}]+/gu) || [];
         const cjkChars = sentence.match(/[\u4e00-\u9fa5]/g) || [];
 
-        if (words.length === 0 && cjkChars.length === 0) return targetCode;
+        // 没单词也没汉字（如纯标点或阿拉伯数字），绝对信任基准 Tag
+        if (words.length === 0 && cjkChars.length === 0) return tagLang;
 
-        // 极限优化的极高频特征字库
         const stopWords = {
             "en": new Set(["the", "is", "are", "you", "and", "to", "it", "that", "of", "in", "we", "i", "what", "for", "with", "this"]),
             "fr": new Set(["le", "la", "les", "et", "est", "sont", "vous", "il", "que", "de", "en", "nous", "je", "tu", "un", "une", "ce", "c", "l", "d", "j", "qu", "m", "t"]),
@@ -317,14 +335,11 @@
             "vi": new Set(["và", "là", "bạn", "anh", "chị", "nó", "rằng", "của", "trong", "chúng", "tôi", "một", "không", "có"]),
             "tr": new Set(["ve", "dir", "sen", "o", "ki", "den", "dan", "içinde", "biz", "ben", "bir", "bu", "için"]),
             "fil": new Set(["at", "ay", "ikaw", "siya", "na", "ng", "sa", "tayo", "kami", "ako", "ang", "mga", "hindi"]),
-            // 依然保留 zh 和 yue，用于它们和其他带有汉字的语种（如日语 ja）发生碰撞时的特征计分
             "zh": new Set(["的", "了", "是", "我", "他", "她", "在", "有", "和", "就", "不", "也", "都", "这", "很", "个"]),
             "yue": new Set(["嘅", "喺", "佢", "哋", "唔", "冇", "咗", "咩", "睇", "俾", "嚟", "諗", "嘢", "係", "咁", "啲"])
         };
 
-        let nativeScore = 0;
-        let targetScore = 0;
-
+        let nativeScore = 0; let targetScore = 0;
         const nativeDict = stopWords[baseNative] || new Set();
         const targetDict = stopWords[baseTarget] || new Set();
 
@@ -339,17 +354,16 @@
             }
         }
 
-        // 3. 决胜逻辑
-        if (nativeScore > targetScore) return nativeCode;
-        if (targetScore > nativeScore) return targetCode;
+        // 3. 决胜逻辑：当物理特征发生绝对碰撞时，直接推翻 Tag
+        if (tagLang === targetCode && nativeScore > targetScore) return nativeCode;
+        if (tagLang === nativeCode && targetScore > nativeScore) return targetCode;
         
-        // 4. 兜底方案
-        return targetCode;
+        // 4. 兜底方案：特征不明显时，绝对信任 LLM 生成的基准 Tag
+        return tagLang;
     }
 
     function playLastTutorMessage(textOverride = null) {
         if (!('speechSynthesis' in window)) return;
-        
         window.speechSynthesis.cancel();
         ttsQueue.length = 0;
         isTTSPlaying = false;
@@ -360,15 +374,7 @@
             if (validTurns.length === 0) return;
             rawText = validTurns[validTurns.length - 1].tutor;
         }
-        
-        // 1. 先进行全局清洗，确保成对的标点（如括号）被正确提取并替换为停顿逗号
-        const sanitizedFullText = sanitizeTextForTTS(rawText);
-        
-        // 2. 扩充切句标点符：加入 LLM 高频教学符号
-        // [^...] 匹配非标点内容，[...] 匹配末尾的标点
-        const splitRegex = /[^。！？.!?\n\r→：:；;—=]+[。！？.!?\n\r→：:；;—=]*/g;
-        const sentences = sanitizedFullText.match(splitRegex) || [sanitizedFullText];
-        
+
         const currentTargetLang = targetLangSelect.value;
         const langMap = { 
             "zh": "zh-CN", "yue": "zh-HK", "en": "en-US", "fr": "fr-FR", "ja": "ja-JP", 
@@ -378,25 +384,55 @@
             "da": "da-DK", "fi": "fi-FI", "pl": "pl-PL", "cs": "cs-CZ", "fil": "fil-PH", 
             "fa": "fa-IR", "el": "el-GR", "hu": "hu-HU", "mk": "mk-MK", "ro": "ro-RO" 
         };
-        
-        sentences.forEach(sentence => {
-            // 去除切分后首尾可能残留的空格，避免空句入列
-            const cleanSentence = sentence.trim(); 
-            
-            if (cleanSentence && cleanSentence !== ',') {
-                let detectedBaseLang = currentTargetLang;
-                
-                // 🎯 物理语种判定：母语辅助开启
-                if (isNativeAllowed) {
-                    detectedBaseLang = detectBinaryLanguage(cleanSentence, nativeLang, currentTargetLang);
-                }
 
-                const mappedLangCode = langMap[detectedBaseLang] || detectedBaseLang;
-                ttsQueue.push({ text: cleanSentence, lang: mappedLangCode });
+        const tgtLangCode = currentTargetLang;
+        const natLangCode = nativeLang || "zh";
+
+        // 1. Tag 基准切分
+        const parts = rawText.replace(/<外[^>]*>/g, '<外语>').replace(/<母[^>]*>/g, '<母语>').split(/(<外语>|<母语>)/g);
+        let currentTagLang = tgtLangCode; 
+
+        parts.forEach(part => {
+            if (part === '<外语>') {
+                currentTagLang = tgtLangCode;
+            } else if (part === '<母语>') {
+                currentTagLang = natLangCode;
+            } else {
+                // 仅去除非法 Tag 自身，保留原生文本
+                const noTagPart = part.replace(/<[^>]*>/g, '');
+                
+                // 🎯 [阶段 1]：柔性前置清洗
+                const preSanitizedBlock = globalPreSanitize(noTagPart);
+                if (!preSanitizedBlock) return;
+
+                // 🎯 [阶段 2]：物理切句 (黄金断句正则)
+                const splitRegex = /[^。！？.!?\n\r→：:；;—=“”"«»]+[。！？.!?\n\r→：:；;—=“”"«»]*/g;
+                const sentences = preSanitizedBlock.match(splitRegex) || [preSanitizedBlock];
+                
+                sentences.forEach(sentence => {
+                    const rawSentence = sentence.trim();
+                    if (!rawSentence) return;
+
+                    let finalLang = currentTagLang; 
+                    
+                    // 🧠 核心：使用未经硬性清洗的 rawSentence 进行二元探测，确保特征字词与标点黏连完好无损
+                    if (isNativeAllowed) {
+                        finalLang = verifyAndOverrideLanguage(rawSentence, currentTagLang, natLangCode, tgtLangCode);
+                    }
+
+                    // 🎯 [阶段 3]：硬性后置清洗（探测完毕后，再销毁不发音符号）
+                    const cleanSentence = localPostSanitize(rawSentence); 
+                    const containsHumanLanguage = /[\p{L}\p{N}\u4e00-\u9fa5]/u.test(cleanSentence);
+
+                    // 仅当最终字符串存在且具有实际发音价值时，入列
+                    if (cleanSentence && cleanSentence.length > 0 && containsHumanLanguage) {
+                        const mappedLangCode = langMap[finalLang] || finalLang;
+                        ttsQueue.push({ text: cleanSentence, lang: mappedLangCode });
+                    }
+                });
             }
         });
 
-        // 启动队列播报
         if (ttsQueue.length > 0) {
             processTTSQueue();
         }
@@ -490,7 +526,7 @@
             }
             if (turn.tutor) {
                 const tDiv = document.createElement('div'); tDiv.className = 'message-row tutor';
-                tDiv.innerHTML = `<div class="bubble">${turn.tutor}</div>`;
+                tDiv.innerHTML = `<div class="bubble">${formatTutorTextVisually(turn.tutor)}</div>`;
                 chatList.appendChild(tDiv);
             }
         });
@@ -634,7 +670,7 @@
                             } 
                             else if (payload.event === "token" && domTutorBubble) {
                                 currentTurn.tutor += payload.text;
-                                domTutorBubble.querySelector('.text-content').innerText = currentTurn.tutor;
+                                domTutorBubble.querySelector('.text-content').innerText = formatTutorTextVisually(currentTurn.tutor);
                                 chatList.scrollTop = chatList.scrollHeight;
                             }
                             else if (payload.event === "end") {
