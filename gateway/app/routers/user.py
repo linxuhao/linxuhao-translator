@@ -8,7 +8,7 @@ from fastapi import APIRouter, Header, Depends, HTTPException, Form
 router = APIRouter()
 
 DB_PATH = "gateway.db"
-ADMIN_EMAIL = "linxuhao84@gmail.com"
+ADMIN_EMAIL = "linxuhao84@gmail.com" # 建议在生产环境中通过 os.getenv("ADMIN_EMAIL") 获取
 
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -16,7 +16,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS access_logs (
                 username TEXT PRIMARY KEY,
                 request_count INTEGER DEFAULT 0,
-                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                role TEXT DEFAULT 'user'
             )
         """)
         try:
@@ -28,16 +29,20 @@ def init_db():
 def record_usage(username: str):
     if not username:
         username = "anonymous" 
-    role = 'admin' if username == ADMIN_EMAIL else 'user'
+    
+    # 仅作为新用户首次插入时的默认初始身份
+    initial_role = 'admin' if username == ADMIN_EMAIL else 'user'
+    
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
             INSERT INTO access_logs (username, request_count, last_active, role)
             VALUES (?, 1, CURRENT_TIMESTAMP, ?)
             ON CONFLICT(username) DO UPDATE SET 
                 request_count = request_count + 1,
-                last_active = CURRENT_TIMESTAMP,
-                role = excluded.role
-        """, (username, role))
+                last_active = CURRENT_TIMESTAMP
+                -- 🎯 致命 Bug 修复：已彻底删除了 role = excluded.role
+                -- 活跃度更新将绝对不再触碰、污染或覆盖由 Admin 面板设定的 VIP 身份
+        """, (username, initial_role))
         conn.commit()
 
 def get_user_priority(cf_user: str) -> int:
@@ -56,7 +61,14 @@ def verify_admin(cf_user: str = Header(None, alias="Cf-Access-Authenticated-User
 
 @router.get("/api/me")
 async def get_my_profile(cf_user: str = Header(None, alias="Cf-Access-Authenticated-User-Email")):
-    return {"email": cf_user, "role": 'admin' if cf_user == ADMIN_EMAIL else 'user'}
+    # 🎯 契约保持：这里主要为前端 UI (如 adminTab) 提供渲染凭证
+    # 增设 is_admin 布尔值，方便前端未来做更清晰的判断
+    is_admin = (cf_user == ADMIN_EMAIL)
+    return {
+        "email": cf_user, 
+        "role": 'admin' if is_admin else 'user',
+        "is_admin": is_admin
+    }
 
 @router.get("/api/admin/users")
 async def get_users_list(admin_user: str = Depends(verify_admin)):
