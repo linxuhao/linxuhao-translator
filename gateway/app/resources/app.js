@@ -4,6 +4,7 @@
 // 包含: VAD 音频采集、流式 SSE 处理、UI 国际化(i18n)、本地存储与播放
 // ==========================================
 
+let debug = false;
 // --- 2. 核心状态机与常量 ---
 let translationQueue = []; 
 let currentForeignLang = "fr"; 
@@ -74,6 +75,7 @@ async function checkAdminStatus() {
     try {
         const res = await fetch('/api/me');
         if (res.ok && (await res.json()).role === 'admin') {
+            debug = true;
             const adminTab = document.getElementById('adminTab');
             // 🎯 如果是超级管理员，解除 display: none 的封印，按 Flex 布局将其挤入导航栏
             if (adminTab) adminTab.style.display = 'flex';
@@ -346,7 +348,8 @@ async function sendAudioChunkStream(audioBlob) {
     formData.append("audio_file", audioBlob, "chunk.webm");
     formData.append("native_lang", nativeLangSelect.value); 
     formData.append("last_foreign_lang", currentForeignLang);
-
+    formData.append("debug", debug ? "true" : "false");
+    
     const recentHistory = translationQueue.slice(-3).map(item => ({
         original: item.original, translated: item.translated
     }));

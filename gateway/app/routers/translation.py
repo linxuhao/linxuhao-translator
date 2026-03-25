@@ -40,7 +40,7 @@ async def convert_webm_to_wav(audio_bytes: bytes) -> bytes:
         logger.error(f"FFmpeg 处理异常: {e}")
         raise
 
-async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chunk_queue: asyncio.Queue):
+async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chunk_queue: asyncio.Queue, debug: bool = False):
     req_id = payload["req_id"]
     audio_bytes = payload["audio_bytes"]
     native_lang_base = payload["native_lang_base"]
@@ -73,8 +73,9 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
             detected_lang_str = match.group(1).lower()
             asr_text = match.group(2).strip()
             input_lang = TO_LANGUAGE_CODE.get(detected_lang_str, "unknown")
-            
-        logger.info(f"[{req_id}] 👂 ASR 耗时: {int((time.time() - t_asr_start)*1000)}ms | detected_lang_str: {detected_lang_str} | 探测语种: {input_lang} | 文本: '{asr_text}'")
+        
+        if debug:
+            logger.info(f"[{req_id}] 👂 ASR 耗时: {int((time.time() - t_asr_start)*1000)}ms | detected_lang_str: {detected_lang_str} | 探测语种: {input_lang} | 文本: '{asr_text}'")
 
         if not asr_text or len(asr_text) < 1:
             await chunk_queue.put({"event": "end", "reason": "empty_audio"})
@@ -149,7 +150,8 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
                     except Exception: pass
                         
         await chunk_queue.put({"event": "end", "target_lang": target_tts_lang})
-        logger.info(f"[{req_id}] 🧠 LLM 完毕 耗时: {int((time.time() - t_llm_start)*1000)}ms | target_lang_full_name: {target_lang_full_name} | 结果: '{full_trans_text}'")
+        if debug:
+            logger.info(f"[{req_id}] 🧠 LLM 完毕 耗时: {int((time.time() - t_llm_start)*1000)}ms | target_lang_full_name: {target_lang_full_name} | 结果: '{full_trans_text}'")
         
     except Exception as e:
         logger.error(f"[{req_id}] 💥 Stream 崩溃: {e}")
@@ -160,10 +162,10 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
 async def voice_worker(worker_id: int):
     async with httpx.AsyncClient(timeout=60.0) as client:
         while True:
-            priority, ts, chunk_queue, payload = await task_queue.get()
+            priority, ts, chunk_queue, payload, debug = await task_queue.get()
             try:
                 logger.info(f"[Worker-{worker_id}] 🌊 翻译请求: {payload['req_id']} | P{priority}")
-                await execute_stream_pipeline(client, payload, chunk_queue)
+                await execute_stream_pipeline(client, payload, chunk_queue, debug)
             except Exception as e:
                 logger.error(f"[Worker-{worker_id}] 💥 崩溃: {e}")
             finally:
@@ -180,6 +182,7 @@ async def stream_voice(
     native_lang: str = Form("zh"), 
     last_foreign_lang: str = Form("fr"), 
     chat_history: str = Form("[]"),
+    debug: bool = Form("false"),
     cf_user: str = Header(None, alias="Cf-Access-Authenticated-User-Email")
 ):
     req_id = f"TRANS-{int(time.time()*1000)}"
@@ -192,7 +195,7 @@ async def stream_voice(
     }
     
     chunk_queue = asyncio.Queue()
-    await task_queue.put((get_user_priority(cf_user), time.time(), chunk_queue, payload))
+    await task_queue.put((get_user_priority(cf_user), time.time(), chunk_queue, payload, debug))
     
     async def event_generator():
         while True:

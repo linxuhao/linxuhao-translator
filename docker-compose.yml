@@ -8,7 +8,6 @@ services:
     restart: unless-stopped
     command: tunnel run
     environment:
-      # ⚠️ 稍后需要在终端获取并填入你的专有 TUNNEL_TOKEN
       - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
 
   # ----------------------------------------

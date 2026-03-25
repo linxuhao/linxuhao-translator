@@ -11,13 +11,12 @@ A high-performance, self-hosted AI translation gateway optimized for heterogeneo
 * **Smart TTS History Queue**: Translations are pushed to a local queue. Includes a check-to-play system designed specifically to bypass iOS Safari's strict audio autoplay restrictions.
 * **LocalStorage Persistence**: Your native language preference and translation history survive page refreshes.
 * **Export & Clear**: Export your entire translation history to a `.txt` file or clear it with one click.
-* **Hardware-Level Latency Probes**: Built-in debug panel detailing Network, Gateway, ASR, and LLM inference latencies in real-time.
 
 ### Engineering & Architecture
 
 * **Heterogeneous Dual-GPU Engine**: 
-  * **Ear Node (ASR)**: Native PyTorch `transformers` with SDPA acceleration running on a secondary GPU (e.g., AMD RX 7800 XT).
-  * **Brain Node (LLM)**: High-throughput `vLLM` engine running a 30B LLM on a flagship GPU (e.g., AMD RX 7900 XTX).
+  * **Ear Node (ASR)**: High-throughput `vLLM` engine running a 1.7B ASR model on a secondary GPU .
+  * **Brain Node (LLM)**: High-throughput `vLLM` engine running a 30B LLM on a flagship GPU.
 * **Audio Pipeline**: FFmpeg Audio normalization to the FastAPI gateway, feeding pure `16kHz WAV` directly into the GPU memory.
 * **Cloudflare Access Ready**: Built-in SQLite telemetry probe that hooks into `Cf-Access-Authenticated-User-Email` headers for usage tracking behind Cloudflare Zero Trust.
 

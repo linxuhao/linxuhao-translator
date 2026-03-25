@@ -164,6 +164,7 @@
     </div>
     <script src="/resources/i18n.js?v=1.3"></script>
     <script>
+    let debug = false;
     // 🎯 核心状态：聊天记录数组
     let tutorHistory = []; 
     const MAX_HISTORY_TURNS = 10; 
@@ -460,7 +461,10 @@
         }
         
         fetch('/api/me').then(res => res.json()).then(data => {
-            if(data.role === 'admin') document.getElementById('adminTab').style.display = 'flex';
+            if(data.role === 'admin') {
+                debug = true;
+                document.getElementById('adminTab').style.display = 'flex';
+            }
         }).catch(()=>{});
     }
     
@@ -627,6 +631,7 @@
         formData.append("target_lang", targetLangSelect.value); 
         formData.append("native_lang", nativeLang); 
         formData.append("allow_native", isNativeAllowed ? "true" : "false");
+        formData.append("debug", debug ? "true" : "false");
 
         const apiHistory = [];
         const recentTurns = tutorHistory.slice(-MAX_HISTORY_TURNS);

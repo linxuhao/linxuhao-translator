@@ -38,7 +38,7 @@ async def convert_webm_to_wav(audio_bytes: bytes) -> bytes:
         logger.error(f"FFmpeg 处理异常: {e}")
         raise
 
-async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_queue: asyncio.Queue):
+async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_queue: asyncio.Queue, debug: bool = False):
     req_id = payload["req_id"]
     audio_bytes = payload["audio_bytes"]
     target_lang = payload["target_lang"]
@@ -72,8 +72,11 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         asr_text = raw_asr_text
         match = re.match(r"^\s*language\s+([A-Za-z]+)\s*<asr_text>\s*(.*)", raw_asr_text, re.IGNORECASE | re.DOTALL)
         if match: asr_text = match.group(2).strip()
-            
-        logger.info(f"[{req_id}] 👨‍🏫 ASR 耗时: {int((time.time() - t_asr_start)*1000)}ms | 文本: '{asr_text}'")
+        
+        if debug:
+            logger.info(f"[{req_id}] 👨‍🏫 ASR 耗时: {int((time.time() - t_asr_start)*1000)}ms | 文本: '{asr_text}'")
+        
+        
 
         if not asr_text or len(asr_text) < 1:
             await chunk_queue.put({"event": "end", "reason": "empty_audio"})
@@ -109,12 +112,17 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         messages = [{"role": "system", "content": system_prompt}]
         
         try:
-            # 严格解析前端传来的最多 10 轮对话记忆
             history_data = json.loads(chat_history_str)
+            
+            # 1. 先过滤出所有合法的历史消息
+            valid_history = []
             for h in history_data:
                 # 外教模式的历史结构：{"role": "user"/"assistant", "content": "..."}
                 if h.get("role") and h.get("content"):
-                    messages.append({"role": h["role"], "content": h["content"]})
+                    valid_history.append({"role": h["role"], "content": h["content"]})
+            
+            # 2. 再截取最新的最多 20 条，追加到主 messages 列表中
+            messages.extend(valid_history[-20:])
         except Exception as e:
             logger.warning(f"[{req_id}] ⚠️ 外教历史记录解析失败: {e}")
 
@@ -139,7 +147,8 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
                     except Exception: pass
                         
         await chunk_queue.put({"event": "end", "target_lang": target_lang})
-        logger.info(f"[{req_id}] 🧠 LLM 回复耗时: {int((time.time() - t_llm_start)*1000)}ms | native_lang_full_name: {native_lang_full_name} | target_lang_full_name: {target_lang_full_name} | 结果: '{full_reply_text}'")
+        if debug:
+            logger.info(f"[{req_id}] 🧠 LLM 回复耗时: {int((time.time() - t_llm_start)*1000)}ms | native_lang_full_name: {native_lang_full_name} | target_lang_full_name: {target_lang_full_name} | 结果: '{full_reply_text}'")
         
     except Exception as e:
         logger.error(f"[{req_id}] 💥 Stream 崩溃: {e}")
@@ -150,10 +159,10 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
 async def tutor_worker(worker_id: int):
     async with httpx.AsyncClient(timeout=60.0) as client:
         while True:
-            priority, ts, chunk_queue, payload = await tutor_task_queue.get()
+            priority, chunk_queue, payload, debug = await tutor_task_queue.get()
             try:
                 logger.info(f"[TutorWorker-{worker_id}] 👨‍🏫 外教请求: {payload['req_id']} | P{priority}")
-                await execute_tutor_stream(client, payload, chunk_queue)
+                await execute_tutor_stream(client, payload, chunk_queue, debug)
             except Exception as e:
                 logger.error(f"[TutorWorker-{worker_id}] 💥 崩溃: {e}")
             finally:
@@ -172,6 +181,7 @@ async def stream_tutor(
     native_lang: str = Form("zh"), 
     allow_native: str = Form("false"),
     chat_history: str = Form("[]"),
+    debug: bool = Form("false"),
     cf_user: str = Header(None, alias="Cf-Access-Authenticated-User-Email")
 ):
     req_id = f"TUTOR-{int(time.time()*1000)}"
@@ -187,7 +197,7 @@ async def stream_tutor(
     }
     
     chunk_queue = asyncio.Queue()
-    await tutor_task_queue.put((get_user_priority(cf_user), time.time(), chunk_queue, payload))
+    await tutor_task_queue.put((get_user_priority(cf_user), chunk_queue, payload, debug))
     
     async def event_generator():
         while True:
