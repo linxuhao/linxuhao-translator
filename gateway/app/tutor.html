@@ -317,8 +317,8 @@
         if (words.length === 0 && cjkChars.length === 0) return tagLang;
 
         const stopWords = {
-            "en": new Set(["the", "is", "are", "you", "and", "to", "it", "that", "of", "in", "we", "i", "what", "for", "with", "this"]),
-            "fr": new Set(["le", "la", "les", "et", "est", "sont", "vous", "il", "que", "de", "en", "nous", "je", "tu", "un", "une", "ce", "c", "l", "d", "j", "qu", "m", "t"]),
+            "en": new Set(["am", "the", "is", "are", "you", "and", "to", "it", "that", "of", "in", "we", "i", "what", "for", "with", "this", "will"]),
+            "fr": new Set(["suis", "je", "es", "le", "la", "les", "et", "est", "sont", "vous", "il", "que", "de", "en", "nous", "je", "tu", "un", "une", "ce", "c", "l", "d", "j", "qu", "m", "t", "é", "à", "è", "ç"]),
             "es": new Set(["el", "la", "los", "las", "y", "es", "son", "tú", "que", "de", "en", "nosotros", "yo", "un", "una", "pero", "con", "por", "para"]),
             "pt": new Set(["o", "a", "os", "as", "e", "é", "são", "você", "ele", "que", "de", "em", "nós", "eu", "um", "uma", "mas", "com", "por", "para"]),
             "id": new Set(["dan", "adalah", "kamu", "dia", "itu", "yang", "dari", "di", "kita", "kami", "saya", "aku", "bisa", "karena", "tidak"]),
