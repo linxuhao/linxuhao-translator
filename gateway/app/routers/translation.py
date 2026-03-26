@@ -132,9 +132,14 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
         except Exception as e:
             logger.warning(f"[{req_id}] ⚠️ 历史记录解析失败, 自动回退至 Zero-shot: {e}")
 
-        # 追加当前用户的最新输入
-        messages.append({"role": "user", "content": asr_text})
+        # 🧠 Prompt Repetition 增强机制注入点
+        enhanced_user_input = f"""{asr_text}
+⚠️ 最终执行指令重复: 请进行跨语种声学纠错，并**仅输出**上述文本的最终{target_lang_full_name}翻译结果，绝对禁止解释或对话。"""
 
+        # 追加增强后的最新输入
+        messages.append({"role": "user", "content": enhanced_user_input})
+
+        # 保持极低的温度以维持稳定性
         brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.2, "max_tokens": 256}
 
         t_llm_start = time.time()
