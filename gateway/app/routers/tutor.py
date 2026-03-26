@@ -92,8 +92,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         # Step 2: 组装外教 Stateful History
         # ----------------------------------------
 
-# prompt_generator.py
-# 修复了原有 Prompt 中条件互斥与 TTS 标签混用的问题，引入状态机逻辑解耦，确保格式可直接用于代码库。
+# 🚀 优化说明：引入 Instruction Repetition（尾部指令强化），动态适配双语/纯外语模式，防止多轮对话后的标签格式崩塌与注音幻觉，且不触发双重输入导致的逻辑错乱。
 
         if allow_native:
             native_rule = f"""【语种与标签映射声明】(最高优)：
@@ -114,8 +113,14 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         4. 状态D：用户沉默、困惑或明确表示听不懂
         -> 直接用 <母语> 安慰他并解释刚才的意思，然后用 <母语> 给出下一步的回答提示。"""
             
+            # 🧠 动态生成尾部强化指令（双语模式）
+            tail_instruction = f"\n\n[System_Override_复核]: 请判断我的状态并回复。必须严格使用 <母语> 或 <外语> 标签！绝对严禁用拼音/汉字谐音标注发音！"
+            
         else:
             native_rule = f"【纯净外语环境】：你必须且只能使用{target_lang_full_name}回复，绝对严禁使用{native_lang_full_name}。每次输出前必须带有 <外语> 标记。"
+            
+            # 🧠 动态生成尾部强化指令（沉浸模式）
+            tail_instruction = f"\n\n[System_Override_复核]: 必须且只能使用 <外语> 标签并输出纯{target_lang_full_name}！严禁出现任何{native_lang_full_name}或注音！"
 
         # 🎯 降维人设：彻底抹除“外教”高高在上的强制感
         system_prompt = f"""你的名字是Marine,你是一位精通{native_lang_full_name}和{target_lang_full_name}的双语语言向导,你的目标是轻松愉快地和用户聊天，顺便教几句{target_lang_full_name}。
@@ -143,8 +148,9 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         except Exception as e:
             logger.warning(f"[{req_id}] ⚠️ 外教历史记录解析失败: {e}")
 
-        # 追加当前用户的最新语音转写文本
-        messages.append({"role": "user", "content": asr_text})
+        # 🧠 将单次输入与尾部强约束拼接，不打破状态机的逻辑推理链
+        enhanced_user_input = f"{asr_text}\n{tail_instruction}"
+        messages.append({"role": "user", "content": enhanced_user_input})
 
         # ----------------------------------------
         # Step 3: 请求大模型进行流式对话
