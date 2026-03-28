@@ -1,6 +1,6 @@
 # 🗣️ 随身翻译官/ShuiShen-Translator
 
-A high-performance, self-hosted AI translation gateway optimized for heterogeneous AMD ROCm multi-GPU environments. It combines the raw hearing capability of **Qwen3-ASR** with the linguistic reasoning of **Qwen3-30B**, wrapped in a mobile-first, iOS-compatible web interface.
+A high-performance, self-hosted AI translation gateway optimized for heterogeneous AMD ROCm multi-GPU environments. It combines the raw hearing capability of **Qwen3-ASR** with the linguistic reasoning of **Qwen3.5-27B**, wrapped in a mobile-first, iOS-compatible web interface.
 
 ## ✨ Key Features
 
