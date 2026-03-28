@@ -246,7 +246,7 @@
     function localPostSanitize(chunk) {
         let clean = chunk
             .replace(/\p{Extended_Pictographic}/gu, '') // 抹除 Emoji
-            .replace(/[_*~～]/g, '') // 抹除 Markdown 痕迹
+            .replace(/[_*~～]/g, '.') // 抹除 Markdown 痕迹
             .replace(/[→—]/g, ', ') // 将视觉引导符转为自然的逗号停顿，引导 TTS 换气
             .replace(/^[,，、\s]+/, '')
             .replace(/[,，\s]+$/, '')
