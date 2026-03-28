@@ -1,0 +1,34 @@
+{# ========================================== #}
+{# 架构定位: 特洛伊木马嗅探模板 (绕过 vLLM API 丢包限制) #}
+{# ========================================== #}
+
+{# 🎯 物理嗅探：默认开启思考。如果系统指令里藏了暗号，立刻切断思考神经！ #}
+{%- set enable_thinking = true %}
+{%- if messages[0].role == 'system' and '<<DISABLE_THINKING>>' in messages[0].content %}
+    {%- set enable_thinking = false %}
+{%- endif %}
+
+{%- if messages[0].role == 'system' %}
+    {# 🎯 销毁证据：渲染时把暗号抹除，绝不让大模型看见 #}
+    {%- set clean_sys = messages[0].content | replace('<<DISABLE_THINKING>>', '') %}
+    {{- '<|im_start|>system\n' + clean_sys + '<|im_end|>\n' }}
+{%- endif %}
+
+{%- for message in messages %}
+    {%- if message.role == 'user' or message.role == 'assistant' %}
+        {# 强制清理历史残骸 #}
+        {%- set clean_content = message.content | replace('<think>', '') | replace('</think>', '') %}
+        {{- '<|im_start|>' + message.role + '\n' + clean_content + '<|im_end|>\n' }}
+    {%- endif %}
+{%- endfor %}
+
+{# 🎯 终极引擎：执行劫持 #}
+{%- if add_generation_prompt %}
+    {%- if enable_thinking %}
+        {# 外教专线：没有暗号，触发闪电思考 #}
+        {{- '<|im_start|>assistant\n<think>\n极简状态分析:' }}
+    {%- else %}
+        {# 翻译专线：检测到暗号，强制预填充闭合标签，毫秒直出！ #}
+        {{- '<|im_start|>assistant\n<think>\n</think>\n' }}
+    {%- endif %}
+{%- endif %}

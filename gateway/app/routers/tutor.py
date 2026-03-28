@@ -88,49 +88,42 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
             "target_lang": target_lang
         })
 
-        # ----------------------------------------
-        # Step 2: 组装外教 Stateful History
-        # ----------------------------------------
-
-# 🚀 优化说明：引入 Instruction Repetition（尾部指令强化），动态适配双语/纯外语模式，防止多轮对话后的标签格式崩塌与注音幻觉，且不触发双重输入导致的逻辑错乱。
+        # ==========================================
+        # 局部修改: routers/tutor.py
+        # 架构定位: 高智商模型专属的“放权式”极简 Prompt
+        # ==========================================
 
         if allow_native:
-            native_rule = f"""【语种与标签映射声明】(最高优)：
-        你的认知母语是 {native_lang_full_name}，但在文本输出时，必须且只能将其包裹在 <母语> 标签后。
-        你的目标教学语言是 {target_lang_full_name}，但在文本输出时，必须且只能将其包裹在 <外语> 标签后。
-
-        【双语标记与TTS发音强制规范】：
-        每次使用{target_lang_full_name}前，必须且只能输出 <外语> 标记；每次使用{native_lang_full_name}前，必须且只能输出 <母语> 标记。严禁在同一个标签内混杂两种语言！
-
-        【对话与教学状态机】：
-        请根据用户的输入状态，严格执行以下逻辑之一：
-        1. 状态A：用户完全用{native_lang_full_name}回答/提问
-        -> 先用 <母语> 简短回应，然后用 <母语> 告诉他这句话的{target_lang_full_name}怎么说，并引导他尝试用{target_lang_full_name}重复。
-        2. 状态B：用户用{target_lang_full_name}表达，且完全正确
-        -> 先用 <外语> 给予简短的肯定，然后用 <外语> 提出下一个简单的话题，继续聊天。
-        3. 状态C：用户发音不准或用{target_lang_full_name}表达有误
-        -> 用 <母语> 简短鼓励并给出正确示范。⚠️【重要防卡死机制】：如果用户连续多次发音错误或遇到困难，直接用 <母语> 轻松带过（例如：“没关系，这个词确实有点难”），并**必须主动转移到一个全新的、极其简单的话题**，绝对不要死磕同一个词！
-        4. 状态D：用户沉默、困惑或明确表示听不懂
-        -> 直接用 <母语> 安慰他并解释刚才的意思，然后用 <母语> 给出下一步的回答提示。"""
+            native_rule = f"""【双语输出规范】(物理级最高优)：
+        - 说{native_lang_full_name}前，必须且只能输出 <母语> 标记。
+        - 说{target_lang_full_name}前，必须且只能输出 <外语> 标记。
+        - 绝对不要输出 </外语> 或 </母语> 这样的闭合标签！
+        绝对严禁在同一个标签的句子中混杂两种语言！如果需要用外语举例，必须物理打断句子，换用新标签！
+        【教学互动指南】：
+        请根据用户的表现自然地切换策略，表现得像个善解人意的朋友，不要死板：
+        1. 教任何内容之后都用{native_lang_full_name}解释
+        2. ⚠️【不死磕原则 (核心)】：如果用户连续读错、觉得困难、沉默或明确表示不想学，绝对不要逼迫他重复！你应该立刻用<母语>安慰他（例如：“没关系，我们聊点别的”），**但是在你转移话题时，你自己依然要极其自然地说一两句简单的<外语>，保持外教的身份和语境浸润感。**
+        3. 当用户困惑或听不懂时：用<母语>解释你刚才的意思，并给出他可以怎么回答的提示。"""
             
             # 🧠 动态生成尾部强化指令（双语模式）
-            tail_instruction = f"\n\n[System_Override_复核]: 请判断我的状态并回复。必须严格使用 <母语> 或 <外语> 标签！绝对严禁用拼音/汉字谐音标注发音！"
+            tail_instruction = f"\n\n[System_Override_复核]: 请用极简短的2-4句话回复。严格遵循标签规范且严禁闭合标签！绝对严禁用拼音/汉字标注发音！"
             
         else:
-            native_rule = f"【纯净外语环境】：你必须且只能使用{target_lang_full_name}回复，绝对严禁使用{native_lang_full_name}。每次输出前必须带有 <外语> 标记。"
+            native_rule = f"""【沉浸外语环境】：
+        你必须且只能使用{target_lang_full_name}回复。每次输出前必须带有 <外语> 标记。
+        ⚠️ 绝对禁令：严禁输出 </外语> 闭合标签！绝对严禁使用{native_lang_full_name}。"""
             
             # 🧠 动态生成尾部强化指令（沉浸模式）
-            tail_instruction = f"\n\n[System_Override_复核]: 必须且只能使用 <外语> 标签并输出纯{target_lang_full_name}！严禁出现任何{native_lang_full_name}或注音！"
+            tail_instruction = f"\n\n[System_Override_复核]: 请用极简短的2-4句话回复。必须且只能使用 <外语> 前缀并输出纯{target_lang_full_name}！严禁输出闭合标签！严禁出现任何注音！"
 
-        # 🎯 降维人设：彻底抹除“外教”高高在上的强制感
-        system_prompt = f"""你的名字是Marine,你是一位精通{native_lang_full_name}和{target_lang_full_name}的双语语言向导,你的目标是轻松愉快地和用户聊天，顺便教几句{target_lang_full_name}。
+        # 🎯 降维人设：双语向导
+        system_prompt = f"""你的名字是Marine，一位精通{native_lang_full_name}和{target_lang_full_name}的双语向导。你的目标是像朋友一样在微信上与用户轻松语音聊天，顺便教几句外语。
         规则：
         1. {native_rule}
-        2. 每次回复要简短，保持礼貌，口语化，像真人在微信聊天（控制在2-4句话内）。严禁长篇大论。
-        3. ⚠️跨语种声学纠错：用户的输入来自AI。初学者的口音常导致AI把外语听成离谱的中文（如把"J'ai faim"听成"直接放"）或其他语言的乱码（如把"J'ai soif"听成"Eu sou"或"This of"）。你必须在脑内判定这是用户在努力模仿， 表现得就像一个善解人意的朋友，直接给出正确的{target_lang_full_name}即可。
-        4. 你是聊天伙伴，如果用户不想学或读不准，就直接用{native_lang_full_name}随性聊天，不要有强迫用户重复的执念。
-        5. 【纯文本发音禁令】：只输出人类能直接读出来的纯文本对话。**绝对严禁用{native_lang_full_name}汉字或拼音/伪音标来标注{target_lang_full_name}的发音（例如：严禁输出类似“bon-zhoor”、“zhé sof”这种谐音）！** 只需要输出正确的法语单词即可。"""
-        
+        2. 【极致简短】：每次回复控制在 2-4 句话以内，极度口语化。严禁长篇大论的语法解释。
+        3. ⚠️【跨语种声学倒推引擎】：用户的语音由ASR转写。当收到极其突兀的{native_lang_full_name}输入时，必须优先在脑内进行“空耳解码”：这是否是用户在努力模仿{target_lang_full_name}，但因为口音极重被识别成了离谱的同音字？（例如：本意是"J'ai faim"，却被识别为"直接放"）。
+        -> 应对策略：若判定为口音误听，请发挥同理心，温柔且自然地给出正确的{target_lang_full_name}示范。绝对严禁拆穿这是机器识别错误，也严禁向用户解释你的纠错推导过程，然后自然的继续下一段聊天/教学。
+        4. 【严禁注音】：只输出纯文本单词。绝对严禁用汉字或拼音标注发音（例如严禁写"bon-zhoor"）。"""
         messages = [{"role": "system", "content": system_prompt}]
         
         try:
@@ -153,12 +146,18 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         messages.append({"role": "user", "content": enhanced_user_input})
 
         # ----------------------------------------
-        # Step 3: 请求大模型进行流式对话
+        # Step 3: 请求大模型进行流式对话 (带思考状态透传与绝对首行修剪)
         # ----------------------------------------
         brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.5, "max_tokens": 1024}
 
         t_llm_start = time.time()
         full_reply_text = ""
+        
+        # 🎯 物理静音滤网状态机
+        is_thinking = True 
+        thinking_buffer = ""
+        has_started_speaking = False  # 🔒 首字修剪锁
+
         async with client.stream("POST", BRAIN_URL, json=brain_payload) as r:
             async for line in r.aiter_lines():
                 if line.startswith("data: ") and line != "data: [DONE]":
@@ -166,12 +165,43 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
                         delta = json.loads(line[6:])["choices"][0]["delta"].get("content", "")
                         if delta: 
                             full_reply_text += delta
-                            await chunk_queue.put({"event": "token", "text": delta})
-                    except Exception: pass
+                            
+                            if is_thinking:
+                                thinking_buffer += delta
+                                
+                                # 💡 UX 优化：把思考的 token 发给前端，事件名设为 think_token
+                                # 前端收到这个事件，不要送给 TTS 发音，只在界面上渲染为浅灰色的斜体字，缓解用户的等待焦虑
+                                await chunk_queue.put({"event": "think_token", "text": delta})
+                                
+                                if "</think>" in thinking_buffer:
+                                    is_thinking = False
+                                    
+                                    # 截取 </think> 之后的内容
+                                    valid_chunk = thinking_buffer.split("</think>")[-1]
+                                    
+                                    # 🔒 极其冷酷的首字修剪：砍掉所有紧跟在 think 后面的换行和空格
+                                    if not has_started_speaking:
+                                        valid_chunk = valid_chunk.lstrip('\n\r ')
+                                        if valid_chunk:
+                                            has_started_speaking = True
+                                            await chunk_queue.put({"event": "token", "text": valid_chunk})
+                                            
+                            else:
+                                # 广播模式
+                                if not has_started_speaking:
+                                    # 🔒 持续修剪，直到遇到第一个有意义的字符
+                                    delta_clean = delta.lstrip('\n\r ')
+                                    if delta_clean:
+                                        has_started_speaking = True
+                                        await chunk_queue.put({"event": "token", "text": delta_clean})
+                                else:
+                                    await chunk_queue.put({"event": "token", "text": delta})
+                    except Exception: 
+                        pass
                         
         await chunk_queue.put({"event": "end", "target_lang": target_lang})
         if debug:
-            logger.info(f"[{req_id}] 🧠 LLM 回复耗时: {int((time.time() - t_llm_start)*1000)}ms | native_lang_full_name: {native_lang_full_name} | target_lang_full_name: {target_lang_full_name} | 结果: '{full_reply_text}'")
+            logger.info(f"[{req_id}] 🧠 LLM 回复耗时: {int((time.time() - t_llm_start)*1000)}ms | 结果: '{full_reply_text}'")
         
     except Exception as e:
         logger.error(f"[{req_id}] 💥 Stream 崩溃: {e}")

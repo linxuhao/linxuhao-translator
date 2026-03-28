@@ -103,7 +103,8 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
 2. ⚠️【跨语种声学纠错】：用户的输入来自ASR，中外语混讲时极易产生荒谬的音译错误（例如把法语 'Bonjour' 强行听成中文的 '分数' 或 '松鼠'）。当遇到极其突兀的中文词汇时，务必在脑内将其转化为读音，反推发音最接近的{target_lang_full_name}单词，完成心理纠错后再进行翻译。
 3. 翻译要地道、自然、口语化，切勿生硬直译乱码。
 4. 绝对禁止解释、对话或输出任何无关的标点符号。
-5. 仅输出针对最新一句话的最终翻译结果。"""
+5. 仅输出针对最新一句话的最终翻译结果。
+<<DISABLE_THINKING>>"""
         messages = [{"role": "system", "content": system_prompt}]
         
         try:

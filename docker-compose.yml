@@ -27,7 +27,7 @@ services:
   # GPU 0 (7900 XTX): vLLM 推理引擎 (2026 SOTA 架构)
   # ==========================================
   vllm-qwen:
-    image: vllm/vllm-openai-rocm:latest
+    image: vllm/vllm-openai-rocm:nightly
     container_name: vllm_qwen
     ports:
       - "8000:8000"
@@ -43,16 +43,21 @@ services:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
+      - ./qwen3.5/thinking.jinja:/app/thinking.jinja
     entrypoint: []
     # 【关键修复 2】：手动指定 bash 执行环境
     command: >
-      vllm serve ELVISIO/Qwen3-30B-A3B-Instruct-2507-AWQ     
-      --quantization awq
+      vllm serve codgician/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GPTQ-int4
       --dtype float16
-      --max-model-len 32768
-      --gpu-memory-utilization 0.95
+      --max-model-len 8192
+      --gpu-memory-utilization 0.99
+      --language-model-only
       --max-num-seqs 80
+      --chat-template /app/thinking.jinja
       --served-model-name qwen3
+      --disable-sliding-window
+      --enable-prefix-caching
+      --enforce-eager
       --trust-remote-code
     restart: unless-stopped
 
