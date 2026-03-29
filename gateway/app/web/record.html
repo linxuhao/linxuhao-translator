@@ -12,25 +12,28 @@
             height: 100vh; height: 100dvh; background-color: #ffffff; color: #1d1d1f; overflow: hidden; 
         }
         
-        /* 顶部控制栏 */
         .header { 
-            width: 100%; padding: env(safe-area-inset-top, 20px) 20px 15px; 
+            position: fixed; top: 0; left: 0; width: 100%; 
+            padding: env(safe-area-inset-top, 20px) 20px 15px; 
             display: flex; justify-content: space-between; align-items: center; 
             background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-            z-index: 100; border-bottom: 1px solid #e5e5ea; flex-shrink: 0;
+            z-index: 1000; border-bottom: 1px solid #e5e5ea;
         }
         .header h1 { margin: 0; font-size: 18px; font-weight: 600; }
-        .lang-group { display: flex; gap: 8px; align-items: center; }
-        .lang-select { 
-            padding: 6px 10px; border-radius: 8px; border: 1px solid #d2d2d7; 
-            font-size: 13px; background: #f5f5f7; outline: none; max-width: 100px;
+        
+        /* 顶部操作按钮组 */
+        .header-actions { display: flex; gap: 8px; }
+        .action-btn {
+            padding: 6px 12px; border-radius: 12px; border: none; font-size: 13px; font-weight: 600;
+            cursor: pointer; outline: none; transition: 0.2s;
         }
+        .action-btn:active { transform: scale(0.95); opacity: 0.8; }
+        .export-btn { background: #007aff; color: white; box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3); }
+        .clear-btn { background: #ffebee; color: #ff3b30; }
 
-        /* 沉浸式记录流 */
         .transcript-container { 
-            width: 100%; max-width: 800px; flex: 1; 
-            /* 预留出控制台(80px)和TabBar(60px)的高度，防止最底部的字被遮挡 */
-            padding: 20px 20px 160px; 
+            width: 100%; max-width: 800px; height: 100dvh;
+            padding: calc(env(safe-area-inset-top, 20px) + 70px) 20px 160px; 
             overflow-y: auto; scroll-behavior: smooth; display: flex; flex-direction: column; gap: 24px;
         }
         
@@ -46,9 +49,7 @@
         }
         @keyframes blink { 50% { opacity: 0; } }
 
-        /* 悬浮录音控制台 (布局修复) */
         .control-dock {
-            /* 🎯 核心修复：使用 bottom 和 calc() 将其推高到 TabBar 之上，避免暴力的 padding */
             position: fixed; bottom: calc(env(safe-area-inset-bottom, 0px) + 80px); left: 50%; transform: translateX(-50%);
             background: #1d1d1f; border-radius: 40px; padding: 8px 24px;
             display: flex; align-items: center; gap: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.15); z-index: 50;
@@ -63,7 +64,6 @@
         .vad-indicator { width: 8px; height: 8px; border-radius: 50%; background: #34c759; opacity: 0.3; transition: 0.1s; flex-shrink: 0;}
         .vad-indicator.active { opacity: 1; box-shadow: 0 0 8px #34c759; }
 
-        /* 🎯 底部原生导航栏 (Bottom Tab Bar) */
         .bottom-tab-bar {
             position: fixed; bottom: 0; left: 0; width: 100%; height: calc(60px + env(safe-area-inset-bottom, 0px));
             background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
@@ -79,10 +79,9 @@
 <body>
     <div class="header">
         <h1 data-i18n="title_record">📝 会议记录</h1>
-        <div class="lang-group">
-            <select class="lang-select" id="langNative"></select>
-            <span style="color:#86868b; font-size: 12px;">⇌</span>
-            <select class="lang-select" id="langForeign"></select>
+        <div class="header-actions">
+            <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
+            <button id="exportBtn" class="action-btn export-btn">📄 Export</button>
         </div>
     </div>
 
@@ -123,48 +122,22 @@
 
 <script src="/resources/i18n.js?v=1.4"></script>
 <script>
-    // ==========================================
-    // 基础设置与 i18n 注入
-    // ==========================================
     let nativeLangCode = 'zh';
+    let targetLangCode = 'en';
+    const fullTranscript = [];
 
     function initUI() {
-        const langNativeSelect = document.getElementById('langNative');
-        const langForeignSelect = document.getElementById('langForeign');
+        nativeLangCode = localStorage.getItem('nativeLangPref') || 'zh';
+        targetLangCode = localStorage.getItem('targetLangPref') || 'en';
 
-        // 动态渲染字典中的语种列表
-        if (typeof SUPPORTED_LANGS !== 'undefined') {
-            const optionsHtml = SUPPORTED_LANGS.map(l => `<option value="${l.v}">${l.n}</option>`).join('');
-            langNativeSelect.innerHTML = optionsHtml;
-            langForeignSelect.innerHTML = optionsHtml;
-        }
-
-        // 读取本地缓存偏好
-        const savedNative = localStorage.getItem('nativeLangPref') || 'zh';
-        const savedForeign = localStorage.getItem('targetLangPref') || 'fr';
-        
-        langNativeSelect.value = savedNative;
-        langForeignSelect.value = savedForeign;
-        nativeLangCode = savedNative;
-
-        // 执行初始化的多语言渲染
         if (window.applyUILanguage) window.applyUILanguage(nativeLangCode);
         updateDynamicStatusUI('status_sleep');
-
-        // 监听系统级配置修改
-        langNativeSelect.addEventListener('change', (e) => {
-            nativeLangCode = e.target.value;
-            localStorage.setItem('nativeLangPref', nativeLangCode);
-            if (window.applyUILanguage) window.applyUILanguage(nativeLangCode);
-            if (!isRecording) updateDynamicStatusUI('status_sleep');
-        });
         
-        langForeignSelect.addEventListener('change', (e) => {
-            localStorage.setItem('targetLangPref', e.target.value);
-        });
+        const isZh = nativeLangCode.startsWith('zh');
+        document.getElementById('exportBtn').innerText = isZh ? '📄 导出' : '📄 Export';
+        document.getElementById('clearBtn').innerText = isZh ? '🗑️ 清空' : '🗑️ Clear';
     }
 
-    // 动态状态文本更新器
     function updateDynamicStatusUI(i18nKey) {
         if (typeof I18N_DICT === 'undefined') return;
         const dict = I18N_DICT[nativeLangCode] || I18N_DICT["zh"];
@@ -173,9 +146,51 @@
         }
     }
 
-    // ==========================================
-    // 核心状态与 VAD 配置 (针对会议加长截断延迟)
-    // ==========================================
+    // 导出功能
+    document.getElementById('exportBtn').addEventListener('click', () => {
+        if (fullTranscript.length === 0) {
+            alert(nativeLangCode.startsWith('zh') ? "暂无记录可导出" : "No transcript to export");
+            return;
+        }
+        
+        let txtContent = "=================================\n";
+        txtContent += `Meeting Transcript / 会议记录\n`;
+        txtContent += `Date: ${new Date().toLocaleString()}\n`;
+        txtContent += "=================================\n\n";
+        
+        fullTranscript.forEach(turn => {
+            txtContent += `[${turn.timestamp}]\n`;
+            txtContent += `Original: ${turn.original}\n`;
+            txtContent += `Translation: ${turn.translated}\n\n`;
+        });
+        
+        const blob = new Blob([txtContent], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `Transcript_${new Date().getTime()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    });
+
+    // 🎯 新增：清空功能
+    document.getElementById('clearBtn').addEventListener('click', () => {
+        if (fullTranscript.length === 0 && chatHistory.length === 0) return;
+        
+        const confirmMsg = nativeLangCode.startsWith('zh') ? "确认清空所有会议记录？（不可恢复）" : "Clear all meeting records? (Cannot be undone)";
+        if (confirm(confirmMsg)) {
+            // 清理底层数据源
+            fullTranscript.length = 0;
+            chatHistory.length = 0;
+            
+            // 清理前端 DOM，并恢复初始提示
+            const isZh = nativeLangCode.startsWith('zh');
+            transcriptBox.innerHTML = `<div id="initHint" style="text-align: center; color: #a1a1a6; font-size: 13px; margin-top: 20px;" data-i18n="hint_record">${isZh ? '点击下方按钮开始持续监听' : 'Tap below to start continuous listening'}</div>`;
+        }
+    });
+
     let isRecording = false;
     let audioContext, analyser, microphone, mediaRecorder, currentStream = null;
     let isRecordingChunk = false;
@@ -191,9 +206,6 @@
     const vadDot = document.getElementById('vadDot');
     const chatHistory = []; 
 
-    // ==========================================
-    // 录音与静音检测逻辑
-    // ==========================================
     async function toggleRecording() {
         if (isRecording) {
             stopRecordingSession();
@@ -278,14 +290,11 @@
         animationFrameId = requestAnimationFrame(detectAudioLoop);
     }
 
-    // ==========================================
-    // SSE 流式接收与 UI 渲染
-    // ==========================================
     async function sendAudioChunk(audioBlob) {
         const formData = new FormData();
         formData.append("audio_file", audioBlob, "chunk.webm");
-        formData.append("native_lang", document.getElementById('langNative').value); 
-        formData.append("last_foreign_lang", document.getElementById('langForeign').value); 
+        formData.append("native_lang", nativeLangCode); 
+        formData.append("last_foreign_lang", targetLangCode); 
         
         const apiHistory = chatHistory.slice(-1);
         formData.append("chat_history", JSON.stringify(apiHistory));
@@ -299,7 +308,7 @@
             
             let domBlock = null;
             let domTranslatedText = null;
-            let currentTurn = { original: "", translated: "" };
+            let currentTurn = { original: "", translated: "", timestamp: "" };
 
             while (true) {
                 const { value, done } = await reader.read();
@@ -315,7 +324,9 @@
                                 const hint = document.getElementById('initHint');
                                 if(hint) hint.remove();
 
+                                const timeStr = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
                                 currentTurn.original = payload.original_text;
+                                currentTurn.timestamp = timeStr;
                                 
                                 domBlock = document.createElement('div');
                                 domBlock.className = 'record-block';
@@ -325,12 +336,13 @@
                                 `;
                                 transcriptBox.appendChild(domBlock);
                                 domTranslatedText = domBlock.querySelector('.t-content');
-                                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                                
+                                transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'smooth' });
                             } 
                             else if (payload.event === "token" && domTranslatedText) {
                                 currentTurn.translated += payload.text;
                                 domTranslatedText.innerText = currentTurn.translated;
-                                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                                transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'smooth' });
                             }
                             else if (payload.event === "end") {
                                 if (payload.reason === "empty_audio") return; 
@@ -339,8 +351,11 @@
                                     const cursor = domBlock.querySelector('.streaming-cursor');
                                     if (cursor) cursor.remove();
                                 }
+                                
                                 chatHistory.push(currentTurn);
                                 if (chatHistory.length > 5) chatHistory.shift();
+                                
+                                fullTranscript.push(currentTurn);
                             }
                         } catch (err) {}
                     }
@@ -349,7 +364,6 @@
         } catch (error) { console.error("API Error:", error); }
     }
 
-    // 执行初始化
     window.onload = initUI;
 </script>
 </body>
