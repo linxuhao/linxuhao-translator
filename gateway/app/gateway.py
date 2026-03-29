@@ -32,15 +32,15 @@ async def root_startup():
 
 @app.get("/")
 async def serve_frontend():
-    with open("index.html", "r", encoding="utf-8") as f:
+    with open("web/index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
     
 @app.get("/tutor")
 async def serve_tutor_page():
-    with open("tutor.html", "r", encoding="utf-8") as f:
+    with open("web/tutor.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
 @app.get("/admin")
 async def serve_admin_page(admin_user: str = Depends(verify_admin)):
-    with open("admin.html", "r", encoding="utf-8") as f:
+    with open("web/admin.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
