@@ -163,7 +163,7 @@
         </a>
     </div>
     <script src="/resources/i18n.js?v=1.3"></script>
-    <script>
+<script>
     let debug = false;
     // 🎯 核心状态：聊天记录数组
     let tutorHistory = []; 
@@ -191,12 +191,22 @@
     const vadLevelFill = document.getElementById('vadLevelFill');
 
     // ========================================================
-    // 🎯 纯前端本地 TTS 引擎核心逻辑 (原生 API + 切句队列)
+    // 🎯 纯前端本地 TTS 引擎核心逻辑 (流式接力与 iOS 兼容)
     // ========================================================
     const ttsQueue = [];
     let isTTSPlaying = false;
+    let ttsStreamBuffer = "";
+    let currentStreamTagLang = null;
 
-    // 2. 本地发音队列状态机 (防御长文本中断 Bug)
+    const GLOBAL_LANG_MAP = { 
+        "zh": "zh-CN", "yue": "zh-HK", "en": "en-US", "fr": "fr-FR", "ja": "ja-JP", 
+        "es": "es-ES", "ru": "ru-RU", "ar": "ar-SA", "de": "de-DE", "pt": "pt-PT", 
+        "id": "id-ID", "it": "it-IT", "ko": "ko-KR", "th": "th-TH", "vi": "vi-VN", 
+        "tr": "tr-TR", "hi": "hi-IN", "ms": "ms-MY", "nl": "nl-NL", "sv": "sv-SE", 
+        "da": "da-DK", "fi": "fi-FI", "pl": "pl-PL", "cs": "cs-CZ", "fil": "fil-PH", 
+        "fa": "fa-IR", "el": "el-GR", "hu": "hu-HU", "mk": "mk-MK", "ro": "ro-RO" 
+    };
+
     function processTTSQueue() {
         if (!('speechSynthesis' in window)) return;
         
@@ -219,76 +229,51 @@
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = lang;
         
-        // 苹果 iOS 必须的 Hack：稍微调低一点语速以提升外语拟真度
         if (lang !== 'zh-CN') {
             utterance.rate = 0.95; 
         }
 
-        utterance.onend = () => {
-            processTTSQueue(); 
-        };
-
-        utterance.onerror = (e) => {
-            console.warn("本地 TTS 播放跳过:", e);
-            processTTSQueue();
-        };
+        utterance.onend = () => processTTSQueue(); 
+        utterance.onerror = (e) => processTTSQueue();
 
         window.speechSynthesis.speak(utterance);
     }
 
     function globalPreSanitize(rawText) {
         if (!rawText) return "";
-        return rawText
-            // 仅将括号内的内容平铺，并加入逗号作为逻辑停顿的占位符
-            .replace(/（([^）]*)）|\(([^)]*)\)/g, ', $1$2, '); 
+        return rawText.replace(/（([^）]*)）|\(([^)]*)\)/g, ', $1$2, '); 
     }
-    // 逻辑：极其冷酷。在送入 TTS 发音前，彻底摧毁所有不发音的视觉符号、Markdown 以及残留的标点碎渣
+    
     function localPostSanitize(chunk) {
-        let clean = chunk
-            .replace(/\p{Extended_Pictographic}/gu, '') // 抹除 Emoji
-            .replace(/[_*~～]/g, ' ') // 抹除 Markdown 痕迹
-            .replace(/[→—]/g, ', ') // 将视觉引导符转为自然的逗号停顿，引导 TTS 换气
+        return chunk
+            .replace(/\p{Extended_Pictographic}/gu, '') 
+            .replace(/[_*~～]/g, ' ') 
+            .replace(/[→—]/g, ', ') 
             .replace(/^[,，、\s]+/, '')
             .replace(/[,，\s]+$/, '')
             .trim();
-        
-        return clean.trim();
     }
 
     function formatTutorTextVisually(rawText) {
-        return rawText
-            .replace(/<外[^>]*>/g, '')  // 兼容 <外语> <外文> <外> 等幻觉
-            .replace(/<母[^>]*>/g, '');
+        return rawText.replace(/<外[^>]*>/g, '').replace(/<母[^>]*>/g, '');
     }
 
-   function verifyAndOverrideLanguage(sentence, tagLang, nativeCode, targetCode) {
+    function verifyAndOverrideLanguage(sentence, tagLang, nativeCode, targetCode) {
         const baseNative = nativeCode.split('-')[0].toLowerCase();
         const baseTarget = targetCode.split('-')[0].toLowerCase();
 
-        // 0. 中粤特攻拦截层 (Heuristic Shortcut)
         if ((baseNative === 'zh' && baseTarget === 'yue') || (baseNative === 'yue' && baseTarget === 'zh')) {
-            // 增加 CJK 判定，防止混合的一两个英文单词被误杀入特攻逻辑
             if (/[\u4e00-\u9fa5]/.test(sentence)) {
                 const yueRegex = /[嘅喺佢哋唔冇咗咩睇俾嚟諗嘢係咁啲這個們來沒說麼會樣為現將覺語嗎愛學機動後裡過實對當經種]/;
-                const yueCode = baseNative === 'yue' ? nativeCode : targetCode;
-                const zhCode = baseNative === 'zh' ? nativeCode : targetCode;
-                return yueRegex.test(sentence) ? yueCode : zhCode;
+                return yueRegex.test(sentence) ? (baseNative === 'yue' ? nativeCode : targetCode) : (baseNative === 'zh' ? nativeCode : targetCode);
             }
         }
 
-        // 1. 绝对物理防御 (Unicode Blocks)
         const scriptRegexes = {
-            zh: /[\u4e00-\u9fa5]/,           
-            yue: /[\u4e00-\u9fa5]/,          
-            ja: /[\u3040-\u30ff]/,           
-            ko: /[\uac00-\ud7af\u1100-\u11ff]/, 
-            ar: /[\u0600-\u06FF]/,           
-            fa: /[\u0600-\u06FF]/,           
-            ru: /[\u0400-\u04FF]/,           
-            mk: /[\u0400-\u04FF]/,           
-            th: /[\u0E00-\u0E7F]/,           
-            el: /[\u0370-\u03FF]/,           
-            hi: /[\u0900-\u097F]/            
+            zh: /[\u4e00-\u9fa5]/, yue: /[\u4e00-\u9fa5]/, ja: /[\u3040-\u30ff]/,           
+            ko: /[\uac00-\ud7af\u1100-\u11ff]/, ar: /[\u0600-\u06FF]/, fa: /[\u0600-\u06FF]/,           
+            ru: /[\u0400-\u04FF]/, mk: /[\u0400-\u04FF]/, th: /[\u0E00-\u0E7F]/,           
+            el: /[\u0370-\u03FF]/, hi: /[\u0900-\u097F]/            
         };
 
         const matchNativeScript = scriptRegexes[baseNative] ? scriptRegexes[baseNative].test(sentence) : false;
@@ -297,45 +282,22 @@
         if (matchNativeScript && !matchTargetScript) return nativeCode;
         if (matchTargetScript && !matchNativeScript) return targetCode;
 
-        // 🎯 [新增] 终极物理拦截：纯净度反转
         const hasCJK = /[\u4e00-\u9fa5\u3040-\u30ff]/.test(sentence);
         const hasLatin = /[a-zA-ZÀ-ÿ]/.test(sentence);
         const isNatCJK = baseNative === 'zh' || baseNative === 'ja' || baseNative === 'yue';
         const isTgtCJK = baseTarget === 'zh' || baseTarget === 'ja' || baseTarget === 'yue';
 
-        // 如果母语是中/日/粤，但在 <母语> 标签的切块里完全找不到 CJK 字符，且存在拉丁字母或目标语字符
-        // 瞬间无视 LLM 的 Tag，强制路由给目标外语！
-        if (isNatCJK && !isTgtCJK && !hasCJK && (hasLatin || matchTargetScript)) {
-            return targetCode;
-        }
+        if (isNatCJK && !isTgtCJK && !hasCJK && (hasLatin || matchTargetScript)) return targetCode;
 
-        // 2. 双轨特征提取引擎 (Dual-track Tokenization)
         const words = sentence.toLowerCase().match(/[\p{L}\p{M}]+/gu) || [];
         const cjkChars = sentence.match(/[\u4e00-\u9fa5]/g) || [];
 
-        // 没单词也没汉字（如纯标点或阿拉伯数字），绝对信任基准 Tag
         if (words.length === 0 && cjkChars.length === 0) return tagLang;
 
-        const stopWords = {
+        const stopWords = { /* 拦截字典保持不变 */
             "en": new Set(["am", "the", "is", "are", "you", "and", "to", "it", "that", "of", "in", "we", "i", "what", "for", "with", "this", "will"]),
             "fr": new Set(["suis", "je", "es", "le", "la", "les", "et", "est", "sont", "vous", "il", "que", "de", "en", "nous", "je", "tu", "un", "une", "ce", "c", "l", "d", "j", "qu", "m", "t", "é", "à", "è", "ç"]),
             "es": new Set(["el", "la", "los", "las", "y", "es", "son", "tú", "que", "de", "en", "nosotros", "yo", "un", "una", "pero", "con", "por", "para"]),
-            "pt": new Set(["o", "a", "os", "as", "e", "é", "são", "você", "ele", "que", "de", "em", "nós", "eu", "um", "uma", "mas", "com", "por", "para"]),
-            "id": new Set(["dan", "adalah", "kamu", "dia", "itu", "yang", "dari", "di", "kita", "kami", "saya", "aku", "bisa", "karena", "tidak"]),
-            "ms": new Set(["dan", "ialah", "awak", "dia", "itu", "yang", "dari", "di", "kita", "kami", "saya", "boleh", "kerana", "tidak"]),
-            "de": new Set(["der", "die", "das", "und", "ist", "sind", "sie", "er", "es", "ich", "wir", "zu", "in", "mit", "auf", "für"]),
-            "it": new Set(["il", "lo", "la", "i", "gli", "le", "e", "è", "sono", "voi", "lui", "che", "di", "in", "noi", "io", "un", "una", "c", "l", "con", "per"]),
-            "nl": new Set(["de", "het", "en", "is", "zijn", "jij", "hij", "dat", "van", "in", "wij", "ik", "een", "te", "voor"]),
-            "sv": new Set(["en", "ett", "och", "är", "du", "han", "det", "att", "av", "i", "vi", "jag", "för", "på", "med"]),
-            "da": new Set(["en", "et", "og", "er", "du", "han", "det", "at", "af", "i", "vi", "jeg", "der", "for", "på", "med"]),
-            "fi": new Set(["ja", "on", "ovat", "sinä", "hän", "se", "että", "niin", "me", "minä", "yksi", "ei", "mutta"]),
-            "pl": new Set(["i", "jest", "są", "ty", "on", "że", "z", "w", "my", "ja", "to", "się", "nie", "na"]),
-            "cs": new Set(["a", "je", "jsou", "ty", "on", "že", "z", "v", "my", "já", "to", "se", "ne", "na"]),
-            "hu": new Set(["és", "van", "vannak", "te", "ő", "hogy", "ban", "ben", "mi", "én", "egy", "nem", "az"]),
-            "ro": new Set(["și", "este", "sunt", "tu", "el", "că", "de", "în", "noi", "eu", "un", "o", "cu", "la"]),
-            "vi": new Set(["và", "là", "bạn", "anh", "chị", "nó", "rằng", "của", "trong", "chúng", "tôi", "một", "không", "có"]),
-            "tr": new Set(["ve", "dir", "sen", "o", "ki", "den", "dan", "içinde", "biz", "ben", "bir", "bu", "için"]),
-            "fil": new Set(["at", "ay", "ikaw", "siya", "na", "ng", "sa", "tayo", "kami", "ako", "ang", "mga", "hindi"]),
             "zh": new Set(["的", "了", "是", "我", "他", "她", "在", "有", "和", "就", "不", "也", "都", "这", "很", "个"]),
             "yue": new Set(["嘅", "喺", "佢", "哋", "唔", "冇", "咗", "咩", "睇", "俾", "嚟", "諗", "嘢", "係", "咁", "啲"])
         };
@@ -355,14 +317,82 @@
             }
         }
 
-        // 3. 决胜逻辑：当物理特征发生绝对碰撞时，直接推翻 Tag
         if (tagLang === targetCode && nativeScore > targetScore) return nativeCode;
         if (tagLang === nativeCode && targetScore > nativeScore) return targetCode;
-        
-        // 4. 兜底方案：特征不明显时，绝对信任 LLM 生成的基准 Tag
         return tagLang;
     }
 
+    // ==========================================
+    // 🧠 新增：流式解析器 (处理断句与动态标签)
+    // ==========================================
+    function feedTTSStream(chunk, isFinished = false) {
+        if (!('speechSynthesis' in window)) return;
+        const tgtLangCode = targetLangSelect.value;
+        const natLangCode = nativeLang || "zh";
+
+        if (!currentStreamTagLang) currentStreamTagLang = tgtLangCode;
+        ttsStreamBuffer += chunk;
+
+        // 正则：尽可能多地匹配字符，直到包含句尾标点（包裹了标签的完整句子）
+        const splitRegex = /^([\s\S]*?[。！？.!?\n\r→：:；;—=“”"«»]+)/;
+
+        let match;
+        while ((match = ttsStreamBuffer.match(splitRegex)) !== null) {
+            let rawBlock = match[1];
+            ttsStreamBuffer = ttsStreamBuffer.substring(rawBlock.length); // 截断缓冲池
+            processTextBlockForTTS(rawBlock, tgtLangCode, natLangCode);
+        }
+
+        if (isFinished && ttsStreamBuffer.trim().length > 0) {
+            processTextBlockForTTS(ttsStreamBuffer, tgtLangCode, natLangCode);
+            ttsStreamBuffer = "";
+            currentStreamTagLang = null;
+        }
+    }
+
+    // 🧠 新增：解析块并分发播放
+    function processTextBlockForTTS(textBlock, tgtLangCode, natLangCode) {
+        // 先按标签打散，确保在句子中途变道语种
+        const parts = textBlock.replace(/<外[^>]*>/g, '<外语>').replace(/<母[^>]*>/g, '<母语>').split(/(<外语>|<母语>)/g);
+        
+        parts.forEach(part => {
+            if (part === '<外语>') {
+                currentStreamTagLang = tgtLangCode;
+            } else if (part === '<母语>') {
+                currentStreamTagLang = natLangCode;
+            } else {
+                const rawText = part.trim();
+                if (!rawText) return;
+                queueSentenceForPlay(rawText, currentStreamTagLang, natLangCode, tgtLangCode);
+            }
+        });
+    }
+
+    // 🧠 新增：单一推入队列执行器 (原 playLastTutorMessage 的内部核心)
+    function queueSentenceForPlay(rawSentence, currentTagLang, natLangCode, tgtLangCode) {
+        const preSanitizedBlock = globalPreSanitize(rawSentence);
+        if (!preSanitizedBlock) return;
+
+        let finalLang = currentTagLang; 
+        if (isNativeAllowed) {
+            finalLang = verifyAndOverrideLanguage(preSanitizedBlock, currentTagLang, natLangCode, tgtLangCode);
+        }
+
+        const cleanSentence = localPostSanitize(preSanitizedBlock); 
+        const containsHumanLanguage = /[\p{L}\p{N}\u4e00-\u9fa5]/u.test(cleanSentence);
+
+        if (cleanSentence && cleanSentence.length > 0 && containsHumanLanguage) {
+            const mappedLangCode = GLOBAL_LANG_MAP[finalLang] || finalLang;
+            ttsQueue.push({ text: cleanSentence, lang: mappedLangCode });
+            
+            // 🔥 触发接力棒：如果没在播放，立刻启动；如果在播放，进入等待队列，完美适配 iOS。
+            if (!isTTSPlaying) {
+                processTTSQueue();
+            }
+        }
+    }
+
+    // 重构原函数：现在只是重置队列并进行一次性流式灌入
     function playLastTutorMessage(textOverride = null) {
         if (!('speechSynthesis' in window)) return;
         window.speechSynthesis.cancel();
@@ -376,67 +406,9 @@
             rawText = validTurns[validTurns.length - 1].tutor;
         }
 
-        const currentTargetLang = targetLangSelect.value;
-        const langMap = { 
-            "zh": "zh-CN", "yue": "zh-HK", "en": "en-US", "fr": "fr-FR", "ja": "ja-JP", 
-            "es": "es-ES", "ru": "ru-RU", "ar": "ar-SA", "de": "de-DE", "pt": "pt-PT", 
-            "id": "id-ID", "it": "it-IT", "ko": "ko-KR", "th": "th-TH", "vi": "vi-VN", 
-            "tr": "tr-TR", "hi": "hi-IN", "ms": "ms-MY", "nl": "nl-NL", "sv": "sv-SE", 
-            "da": "da-DK", "fi": "fi-FI", "pl": "pl-PL", "cs": "cs-CZ", "fil": "fil-PH", 
-            "fa": "fa-IR", "el": "el-GR", "hu": "hu-HU", "mk": "mk-MK", "ro": "ro-RO" 
-        };
-
-        const tgtLangCode = currentTargetLang;
-        const natLangCode = nativeLang || "zh";
-
-        // 1. Tag 基准切分
-        const parts = rawText.replace(/<外[^>]*>/g, '<外语>').replace(/<母[^>]*>/g, '<母语>').split(/(<外语>|<母语>)/g);
-        let currentTagLang = tgtLangCode; 
-
-        parts.forEach(part => {
-            if (part === '<外语>') {
-                currentTagLang = tgtLangCode;
-            } else if (part === '<母语>') {
-                currentTagLang = natLangCode;
-            } else {
-                // 仅去除非法 Tag 自身，保留原生文本
-                const noTagPart = part.replace(/<[^>]*>/g, '');
-                
-                // 🎯 [阶段 1]：柔性前置清洗
-                const preSanitizedBlock = globalPreSanitize(noTagPart);
-                if (!preSanitizedBlock) return;
-
-                // 🎯 [阶段 2]：物理切句 (黄金断句正则)
-                const splitRegex = /[^。！？.!?\n\r→：:；;—=“”"«»]+[。！？.!?\n\r→：:；;—=“”"«»]*/g;
-                const sentences = preSanitizedBlock.match(splitRegex) || [preSanitizedBlock];
-                
-                sentences.forEach(sentence => {
-                    const rawSentence = sentence.trim();
-                    if (!rawSentence) return;
-
-                    let finalLang = currentTagLang; 
-                    
-                    // 🧠 核心：使用未经硬性清洗的 rawSentence 进行二元探测，确保特征字词与标点黏连完好无损
-                    if (isNativeAllowed) {
-                        finalLang = verifyAndOverrideLanguage(rawSentence, currentTagLang, natLangCode, tgtLangCode);
-                    }
-
-                    // 🎯 [阶段 3]：硬性后置清洗（探测完毕后，再销毁不发音符号）
-                    const cleanSentence = localPostSanitize(rawSentence); 
-                    const containsHumanLanguage = /[\p{L}\p{N}\u4e00-\u9fa5]/u.test(cleanSentence);
-
-                    // 仅当最终字符串存在且具有实际发音价值时，入列
-                    if (cleanSentence && cleanSentence.length > 0 && containsHumanLanguage) {
-                        const mappedLangCode = langMap[finalLang] || finalLang;
-                        ttsQueue.push({ text: cleanSentence, lang: mappedLangCode });
-                    }
-                });
-            }
-        });
-
-        if (ttsQueue.length > 0) {
-            processTTSQueue();
-        }
+        currentStreamTagLang = targetLangSelect.value;
+        ttsStreamBuffer = "";
+        feedTTSStream(rawText, true); 
     }
 
     // ========================================================
@@ -491,17 +463,14 @@
     
     function syncNativeToggleState() {
         const currentTarget = targetLangSelect.value;
-        const currentNative = nativeLang; // 当前 UI 的真实母语 (例如 'zh')
+        const currentNative = nativeLang;
 
         if (currentTarget === currentNative) {
-            // 物理锁定：目标语和母语一致，强行置灰按钮，状态强制为 false
             allowNativeToggle.disabled = true;
             isNativeAllowed = false;
             updateNativeToggleUI();
         } else {
-            // 解除锁定：恢复按钮可用性
             allowNativeToggle.disabled = false;
-            // 极其贴心的细节：不要死板地设为 false，而是从本地缓存恢复用户原本的偏好
             isNativeAllowed = localStorage.getItem('tutorNativeAllowed') === 'true';
             updateNativeToggleUI();
         }
@@ -515,7 +484,7 @@
 
     targetLangSelect.addEventListener('change', (e) => {
         localStorage.setItem('tutorLangPref', e.target.value);
-        syncNativeToggleState(); // 瞬间联动检查
+        syncNativeToggleState(); 
     });
 
     function syncHistory() { localStorage.setItem('tutorQueueHistory', JSON.stringify(tutorHistory)); }
@@ -672,11 +641,18 @@
                                 tRow.appendChild(domTutorBubble);
                                 chatList.appendChild(tRow);
                                 chatList.scrollTop = chatList.scrollHeight;
+
+                                // 🎯 SSE 开始，初始化缓冲状态
+                                ttsStreamBuffer = "";
+                                currentStreamTagLang = targetLangSelect.value;
                             } 
                             else if (payload.event === "token" && domTutorBubble) {
                                 currentTurn.tutor += payload.text;
                                 domTutorBubble.querySelector('.text-content').innerText = formatTutorTextVisually(currentTurn.tutor);
                                 chatList.scrollTop = chatList.scrollHeight;
+
+                                // 🎯 边收边播：增量推流给引擎
+                                feedTTSStream(payload.text, false);
                             }
                             else if (payload.event === "end") {
                                 if (payload.reason === "empty_audio") return; 
@@ -689,8 +665,8 @@
                                 tutorHistory.push(currentTurn);
                                 syncHistory();
                                 
-                                // 🎯 SSE 结束，触发纯本地分段语种识别与播报
-                                playLastTutorMessage(currentTurn.tutor);
+                                // 🎯 SSE 结束，强制清空并解析所有尾部缓冲字符
+                                feedTTSStream("", true);
                             }
                         } catch (err) {}
                     }
