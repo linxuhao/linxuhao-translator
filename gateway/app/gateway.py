@@ -39,6 +39,11 @@ async def serve_frontend():
 async def serve_tutor_page():
     with open("web/tutor.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
+    
+@app.get("/record")
+async def serve_tutor_page():
+    with open("web/record.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
 
 @app.get("/admin")
 async def serve_admin_page(admin_user: str = Depends(verify_admin)):
