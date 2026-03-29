@@ -29,6 +29,6 @@
         {{- '<|im_start|>assistant\n<think>\n极简状态分析:' }}
     {%- else %}
         {# 翻译专线：检测到暗号，强制预填充闭合标签，毫秒直出！ #}
-        {{- '<|im_start|>assistant\n<think>\n</think>\n' }}
+        {{- '<|im_start|>assistant\n<think>\n推理限额已达，我将直接输出确定性答案。</think>\n' }}
     {%- endif %}
 {%- endif %}

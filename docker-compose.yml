@@ -40,6 +40,7 @@ services:
     environment:
       - HIP_VISIBLE_DEVICES=0
       - VLLM_USE_TRITON_AWQ=1
+      - FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
@@ -54,10 +55,10 @@ services:
       --language-model-only
       --max-num-seqs 80
       --chat-template /app/thinking.jinja
-      --served-model-name qwen3
       --disable-sliding-window
       --enable-prefix-caching
       --enforce-eager
+      --served-model-name qwen3
       --trust-remote-code
     restart: unless-stopped
 

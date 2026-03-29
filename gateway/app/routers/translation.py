@@ -97,13 +97,22 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
             "detected_foreign_lang": detected_foreign_lang 
         })
 
-        system_prompt = f"""你是一个顶级的同声传译专家。请将用户的话翻译为{target_lang_full_name}。
-规则：
-1. 结合上下文语境，保持代词和术语的连贯性。
-2. ⚠️【跨语种声学纠错】：用户的输入来自ASR，中外语混讲时极易产生荒谬的音译错误（例如把法语 'Bonjour' 强行听成中文的 '分数' 或 '松鼠'）。当遇到极其突兀的中文词汇时，务必在脑内将其转化为读音，反推发音最接近的{target_lang_full_name}单词，完成心理纠错后再进行翻译。
-3. 翻译要地道、自然、口语化，切勿生硬直译乱码。
-4. 绝对禁止解释、对话或输出任何无关的标点符号。
-5. 仅输出针对最新一句话的最终翻译结果。
+        system_prompt = f"""你是一个执行驱动的自动化翻译引擎。你的唯一最高优先级是语种映射与字符级协议兼容性。
+核心操作规则（CORE OPERATING RULES）：
+
+仅输出针对最新一句话的{target_lang_full_name}的翻译结果，禁止输出任何其他字符。
+
+绝对禁止回复用户，或者给用户纠错。
+
+绝对禁止在输出前后添加诸如“好的”、“这是翻译结果”等对话式前言或问候语。
+
+绝对禁止附加任何语法解释、文化备注、总结或翻译策略说明。
+
+绝对禁止使用Markdown代码块（Code Fences）包裹翻译结果，除非源文本本身包含代码块。
+
+必须保持源文本的所有路径、缩进和结构化空白符（Whitespace）的原样映射。
+任何偏离上述规则的附加解释都会导致自动化管线崩溃。禁止一切创造性行为，必须保持严格、刻板与字面映射。
+
 <<DISABLE_THINKING>>"""
         messages = [{"role": "system", "content": system_prompt}]
         
@@ -118,11 +127,9 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
                 is_couple_matched = True
                 
             if is_couple_matched:
-                # 语种对未变：仅保留最后 1 轮对话 (限制污染范围)
                 if len(history_data) > 0:
                     valid_history = [history_data[-1]]
             else:
-                # 语种对剧变：无情斩断所有历史，防止幻觉交叉污染
                 logger.warning(f"[{req_id}] ⚠️ 语种越界 ({input_lang} ∉ {native_lang_base}/{last_foreign_lang}) -> 物理斩断记忆")
                 valid_history = []
                 
@@ -133,15 +140,33 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
         except Exception as e:
             logger.warning(f"[{req_id}] ⚠️ 历史记录解析失败, 自动回退至 Zero-shot: {e}")
 
-        # 🧠 Prompt Repetition 增强机制注入点
-        enhanced_user_input = f"""{asr_text}
-⚠️ 最终执行指令重复: 请进行跨语种声学纠错，并**仅输出**上述文本的最终{target_lang_full_name}翻译结果，绝对禁止解释或对话。"""
+        messages.append({"role": "user", "content": asr_text})
 
-        # 追加增强后的最新输入
-        messages.append({"role": "user", "content": enhanced_user_input})
-
-        # 保持极低的温度以维持稳定性
-        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.2, "max_tokens": 256}
+        brain_payload = {
+            "model": "qwen3",
+            "messages": messages,
+            "stream": True,
+            "max_tokens": 256,
+            
+            # --- 核心采样参数校准 ---
+            # 放弃绝对 0.0，保留 0.6 以维持目标语言的自然语感与句法流畅度
+            "temperature": 0.6,
+            
+            # 物理切断概率分布长尾，杜绝结尾处的“灵光一现”（额外解释）
+            "top_p": 0.80,
+            
+            # 绝对硬截断，仅允许前 20 个最优 Token，建立防御虚假解释的数学屏障
+            "top_k": 20,
+            
+            # 停用此参数，依赖 top_p 和 top_k 联合过滤
+            "min_p": 0.0,
+            
+            # 极高优先级惩罚，强制推进语意，防止翻译长文本时的“复读机”死循环
+            "presence_penalty": 1.5,
+            
+            # 轻微重复惩罚，足以抑制乱码或结巴，同时保护正常语法结构（如冠词重复）
+            "repetition_penalty": 1.05
+        }
 
         t_llm_start = time.time()
         full_trans_text = ""
