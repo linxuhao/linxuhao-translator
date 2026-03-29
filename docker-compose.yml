@@ -58,6 +58,7 @@ services:
       --disable-sliding-window
       --enable-prefix-caching
       --enforce-eager
+      --reasoning-config '{"think_start_str": "<think>", "think_end_str": "推理限额已达，我将直接输出确定性答案。</think>"}'
       --served-model-name qwen3
       --trust-remote-code
     restart: unless-stopped
