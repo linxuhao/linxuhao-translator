@@ -7,7 +7,7 @@ from fastapi import FastAPI, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from routers import user, translation, tutor
+from routers import user, translation, tutor, record
 from routers.user import init_db, verify_admin
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s", datefmt="%H:%M:%S")
@@ -18,6 +18,7 @@ app = FastAPI(title="Voice Gateway API")
 app.include_router(user.router)
 app.include_router(translation.router)
 app.include_router(tutor.router)
+app.include_router(record.router)
 
 # 挂载静态资源
 app.mount("/resources", StaticFiles(directory="resources"), name="resources")
@@ -29,6 +30,7 @@ async def root_startup():
     #🎯
     translation.start_translation_workers()
     tutor.start_tutor_workers()
+    record.start_record_workers()
 
 @app.get("/")
 async def serve_frontend():

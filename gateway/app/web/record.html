@@ -25,7 +25,7 @@
         .header h1 { margin: 0; font-size: 18px; font-weight: 600; white-space: nowrap; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
         .edit-icon { font-size: 14px; opacity: 0.5; }
 
-        .header-actions { display: flex; gap: 8px; }
+        .header-actions { display: flex; gap: 8px; align-items: center; }
         .action-btn {
             padding: 6px 12px; border-radius: 12px; border: none; font-size: 13px; font-weight: 600;
             cursor: pointer; outline: none; transition: 0.2s;
@@ -33,6 +33,12 @@
         .action-btn:active { transform: scale(0.95); opacity: 0.8; }
         .new-btn { background: #e8f5e9; color: #34c759; }
         .files-btn { background: #f2f2f7; color: #007aff; }
+        .lang-select {
+            padding: 6px 10px; border-radius: 8px; border: 1px solid #e5e5ea;
+            font-size: 13px; font-weight: 600; background: white; color: #1d1d1f;
+            cursor: pointer; outline: none; transition: 0.2s; max-width: 100px;
+        }
+        .lang-select:active { transform: scale(0.95); }
 
         .transcript-container { 
             width: 100%; max-width: 800px; height: 100dvh;
@@ -122,6 +128,7 @@
             <span class="edit-icon">✏️</span>
         </div>
         <div class="header-actions">
+            <select id="targetLangSelect" class="lang-select" onchange="onTargetLangChange()"></select>
             <button id="newSessionBtn" class="action-btn new-btn" data-i18n="btn_new">➕ New</button>
             <button id="openFilesBtn" class="action-btn files-btn" data-i18n="btn_files">📂 Files</button>
         </div>
@@ -143,8 +150,7 @@
                 <h2 data-i18n="modal_files_title">本地会议记录</h2>
                 <button class="close-modal-btn" id="closeFilesBtn">✖</button>
             </div>
-            <div class="file-list" id="fileListContainer">
-                </div>
+            <div class="file-list" id="fileListContainer"></div>
         </div>
     </div>
 
@@ -177,7 +183,7 @@
 <script>
     let debug = false;
     let nativeLangCode = 'zh';
-    let targetLangCode = 'fr';
+    let recordTargetLangCode = 'zh';
     const transcriptBox = document.getElementById('transcriptBox');
     
     let meetingSessions = [];
@@ -187,9 +193,6 @@
 
     function getDict() { return typeof I18N_DICT !== 'undefined' ? (I18N_DICT[nativeLangCode] || I18N_DICT["en"]) : {}; }
 
-    // ==========================================
-    // 文件系统与持久化
-    // ==========================================
     function loadAllSessionsFromStorage() {
         try {
             const saved = localStorage.getItem('meeting_sessions_v2');
@@ -226,9 +229,6 @@
         }
     }
 
-    // ==========================================
-    // 交互逻辑 (重命名、新建、切换、删除、导出)
-    // ==========================================
     function renameSession(id) {
         const session = meetingSessions.find(s => s.id === id);
         if (!session) return;
@@ -348,12 +348,35 @@
         URL.revokeObjectURL(url);
     }
 
-    // ==========================================
-    // UI 绑定与弹窗渲染
-    // ==========================================
+    function initLangSelector() {
+        const select = document.getElementById('targetLangSelect');
+        recordTargetLangCode = localStorage.getItem('recordTargetLangPref') || nativeLangCode;
+        
+        if (typeof SUPPORTED_LANGS !== 'undefined') {
+            select.innerHTML = SUPPORTED_LANGS.map(lang =>
+                `<option value="${lang.v}" ${lang.v === recordTargetLangCode ? 'selected' : ''}>${lang.n}</option>`
+            ).join('');
+        } else {
+            const commonLangs = [
+                {v: "zh", n: "中文"}, {v: "en", n: "English"}, {v: "fr", n: "Français"},
+                {v: "es", n: "Español"}, {v: "de", n: "Deutsch"}, {v: "ja", n: "日本語"}
+            ];
+            select.innerHTML = commonLangs.map(lang =>
+                `<option value="${lang.v}" ${lang.v === recordTargetLangCode ? 'selected' : ''}>${lang.n}</option>`
+            ).join('');
+        }
+    }
+    
+    function onTargetLangChange() {
+        const select = document.getElementById('targetLangSelect');
+        recordTargetLangCode = select.value;
+        localStorage.setItem('recordTargetLangPref', recordTargetLangCode);
+    }
+
     function initUI() {
         nativeLangCode = localStorage.getItem('nativeLangPref') || 'zh';
-        targetLangCode = localStorage.getItem('tutorLangPref') || 'fr';
+        
+        initLangSelector();
 
         if (window.applyUILanguage) window.applyUILanguage(nativeLangCode);
         updateDynamicStatusUI('status_sleep');
@@ -431,17 +454,14 @@
         }).join('');
     }
 
-    // ==========================================
-    // 录音与 SSE 流式核心逻辑 (针对会议场景的 VAD 配置)
-    // ==========================================
     let isRecording = false;
     let audioContext, analyser, microphone, mediaRecorder, currentStream = null;
     let isRecordingChunk = false;
     let audioChunks = [], silenceStartTime = 0, recordStartTime = 0, animationFrameId;
 
     const VAD_THRESHOLD = 0.02;  
-    const SILENCE_LIMIT = 1800;  
-    const MAX_RECORD_LIMIT = 15000; 
+    const SILENCE_LIMIT = 1000;  
+    const MAX_RECORD_LIMIT = 30000; 
 
     const recordToggle = document.getElementById('recordToggle');
     const statusLabel = document.getElementById('statusLabel');
@@ -534,15 +554,14 @@
     async function sendAudioChunk(audioBlob) {
         const formData = new FormData();
         formData.append("audio_file", audioBlob, "chunk.webm");
-        formData.append("native_lang", nativeLangCode); 
-        formData.append("last_foreign_lang", targetLangCode); 
+        formData.append("target_lang", recordTargetLangCode);
         formData.append("debug", debug ? "true" : "false");
         
-        const apiHistory = chatHistory.slice(-1);
+        const apiHistory = chatHistory.slice(-5);
         formData.append("chat_history", JSON.stringify(apiHistory));
 
         try {
-            const response = await fetch("/api/stream_voice", { method: "POST", body: formData });
+            const response = await fetch("/api/record_stream", { method: "POST", body: formData });
             if (!response.ok) return;
 
             const reader = response.body.getReader();
@@ -562,13 +581,31 @@
                         try {
                             const payload = JSON.parse(ev.slice(6));
                             
-                            if (payload.event === "start") {
+                            if (payload.event === "thinking_start") {
                                 const hint = document.getElementById('initHint');
-                                if(hint) hint.remove();
+                                if(hint) hint.style.display = 'none';
+                                
+                                let tempBlock = document.getElementById('tempThinkingBlock');
+                                if (!tempBlock) {
+                                    const dict = getDict();
+                                    const thinkingText = nativeLangCode.startsWith('zh') ? "🧠 AI 正在融合多个视角的记录..." : "🧠 AI is merging multiple perspectives...";
+                                    
+                                    tempBlock = document.createElement('div');
+                                    tempBlock.className = 'record-block';
+                                    tempBlock.id = 'tempThinkingBlock';
+                                    tempBlock.innerHTML = `<div class="original-text" style="font-style: italic; color: #a1a1a6;">${thinkingText}</div>`;
+                                    transcriptBox.appendChild(tempBlock);
+                                    transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'smooth' });
+                                }
+                            }
+                            else if (payload.event === "start") {
+                                const tempBlock = document.getElementById('tempThinkingBlock');
+                                if (tempBlock) tempBlock.remove();
 
                                 const timeStr = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                                currentTurn.original = payload.original_text;
+                                currentTurn.original = payload.original_text; 
                                 currentTurn.timestamp = timeStr;
+                                currentTurn.detected_langs = payload.detected_langs || [];
                                 
                                 domBlock = document.createElement('div');
                                 domBlock.className = 'record-block';
