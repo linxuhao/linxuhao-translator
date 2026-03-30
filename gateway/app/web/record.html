@@ -17,18 +17,21 @@
             padding: env(safe-area-inset-top, 20px) 20px 15px; 
             display: flex; justify-content: space-between; align-items: center; 
             background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-            z-index: 1000; border-bottom: 1px solid #e5e5ea;
+            z-index: 1000; border-bottom: 1px solid #e5e5ea; gap: 12px;
         }
         
-        .header-title-wrapper { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 8px; border-radius: 8px; transition: 0.2s; margin-left: -8px; }
+        /* 🎯 修复1: 增加 min-width: 0 和 flex: 1，强制文本超长时自动截断而不是挤压右侧 */
+        .header-title-wrapper { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 8px; border-radius: 8px; transition: 0.2s; margin-left: -8px; flex: 1; min-width: 0; }
         .header-title-wrapper:active { background: #f2f2f7; }
-        .header h1 { margin: 0; font-size: 18px; font-weight: 600; white-space: nowrap; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
-        .edit-icon { font-size: 14px; opacity: 0.5; }
+        .header h1 { margin: 0; font-size: 18px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+        .edit-icon { font-size: 14px; opacity: 0.5; flex-shrink: 0; }
 
-        .header-actions { display: flex; gap: 8px; align-items: center; }
+        /* 🎯 修复1: 保护右侧按钮区不被压缩 */
+        .header-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+        
         .action-btn {
             padding: 6px 12px; border-radius: 12px; border: none; font-size: 13px; font-weight: 600;
-            cursor: pointer; outline: none; transition: 0.2s;
+            cursor: pointer; outline: none; transition: 0.2s; white-space: nowrap;
         }
         .action-btn:active { transform: scale(0.95); opacity: 0.8; }
         .new-btn { background: #e8f5e9; color: #34c759; }
@@ -40,9 +43,10 @@
         }
         .lang-select:active { transform: scale(0.95); }
 
+        /* 🎯 修复2: 顶部 padding 从 70px 增加到 95px，防止遮挡 */
         .transcript-container { 
             width: 100%; max-width: 800px; height: 100dvh;
-            padding: calc(env(safe-area-inset-top, 20px) + 70px) 20px 160px; 
+            padding: calc(env(safe-area-inset-top, 20px) + 95px) 20px 160px; 
             overflow-y: auto; scroll-behavior: smooth; display: flex; flex-direction: column; gap: 24px;
         }
         
@@ -97,10 +101,10 @@
         }
         .file-item.active-session { border-color: #007aff; background: #f0f8ff; }
         .file-info { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-        .file-title-area { display: flex; align-items: center; gap: 6px; flex: 1; cursor: pointer; }
+        .file-title-area { display: flex; align-items: center; gap: 6px; flex: 1; cursor: pointer; min-width: 0; }
         .file-title-area:active { opacity: 0.6; }
         .file-title { font-weight: 600; font-size: 14px; color: #1d1d1f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
-        .file-count { font-size: 12px; color: #86868b; background: #e5e5ea; padding: 2px 6px; border-radius: 10px; white-space: nowrap; }
+        .file-count { font-size: 12px; color: #86868b; background: #e5e5ea; padding: 2px 6px; border-radius: 10px; white-space: nowrap; flex-shrink: 0; }
         .file-actions { display: flex; justify-content: flex-end; gap: 8px; }
         .f-btn { padding: 4px 10px; border-radius: 8px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; }
         .f-btn-load { background: #007aff; color: white; }
@@ -461,7 +465,7 @@
 
     const VAD_THRESHOLD = 0.02;  
     const SILENCE_LIMIT = 1000;  
-    const MAX_RECORD_LIMIT = 30000; 
+    const MAX_RECORD_LIMIT = 20000; 
 
     const recordToggle = document.getElementById('recordToggle');
     const statusLabel = document.getElementById('statusLabel');
