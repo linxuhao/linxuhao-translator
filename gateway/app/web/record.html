@@ -173,7 +173,7 @@
         </a>
     </div>
 
-<script src="/resources/i18n.js?v=1.6"></script>
+<script src="/resources/i18n.js?v=1.8"></script>
 <script>
     let debug = false;
     let nativeLangCode = 'zh';
@@ -201,7 +201,7 @@
         try {
             localStorage.setItem('meeting_sessions_v2', JSON.stringify(meetingSessions));
         } catch(e) {
-            alert(getDict().msg_empty_export || "Local storage full.");
+            alert(getDict().msg_storage_full || "Local storage full. Please export and delete old records.");
         }
     }
 
@@ -251,10 +251,12 @@
         const id = Date.now().toString();
         const dateStr = new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         
-        const isZh = nativeLangCode.startsWith('zh');
+        const dict = getDict();
+        const defaultName = dict.default_meeting_name || "Meeting";
+        
         const newSession = {
             id: id,
-            title: isZh ? `会议 ${dateStr}` : `Meeting ${dateStr}`,
+            title: `${defaultName} ${dateStr}`,
             data: []
         };
         
@@ -351,21 +353,20 @@
     // ==========================================
     function initUI() {
         nativeLangCode = localStorage.getItem('nativeLangPref') || 'zh';
-        targetLangCode = localStorage.getItem('targetLangPref') || 'en';
+        targetLangCode = localStorage.getItem('tutorLangPref') || 'fr';
 
         if (window.applyUILanguage) window.applyUILanguage(nativeLangCode);
         updateDynamicStatusUI('status_sleep');
 
         loadAllSessionsFromStorage();
         cleanEmptySessions(); 
-
+        
         if (meetingSessions.length === 0) {
             createNewSession(true);
         } else {
             const savedCurrentId = localStorage.getItem('current_session_id');
             const targetId = meetingSessions.find(s => s.id === savedCurrentId) ? savedCurrentId : meetingSessions[0].id;
             switchSession(targetId);
-
         }
         fetch('/api/me').then(res => res.json()).then(data => {
             if(data.role === 'admin') {
@@ -406,21 +407,24 @@
         container.innerHTML = meetingSessions.map(session => {
             const isActive = session.id === currentSessionId;
             const dataCount = session.data ? session.data.length : 0;
+            const itemsWord = dict.word_items || "items";
+            const renameTitle = dict.title_rename || "Rename";
+
             return `
                 <div class="file-item ${isActive ? 'active-session' : ''}">
                     <div class="file-info">
-                        <div class="file-title-area" onclick="renameSession('${session.id}')" title="Rename">
+                        <div class="file-title-area" onclick="renameSession('${session.id}')" title="${renameTitle}">
                             <span class="file-title">${session.title}</span>
                             <span class="edit-icon">✏️</span>
                         </div>
-                        <span class="file-count">${dataCount} items</span>
+                        <span class="file-count">${dataCount} ${itemsWord}</span>
                     </div>
                     <div class="file-actions">
                         <button class="f-btn f-btn-load" onclick="switchSession('${session.id}')" ${isActive ? 'disabled' : ''}>
                             ${isActive ? (dict.btn_active || 'Active') : (dict.btn_load || 'Load')}
                         </button>
                         <button class="f-btn f-btn-export" onclick="exportSession('${session.id}')">${dict.btn_export || 'Export'}</button>
-                        <button class="f-btn f-btn-delete" onclick="deleteSession('${session.id}')">🗑️</button>
+                        <button class="f-btn f-btn-delete" onclick="deleteSession('${session.id}')" title="Delete">🗑️</button>
                     </div>
                 </div>
             `;
