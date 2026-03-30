@@ -20,13 +20,11 @@
             z-index: 1000; border-bottom: 1px solid #e5e5ea; gap: 12px;
         }
         
-        /* 🎯 修复1: 增加 min-width: 0 和 flex: 1，强制文本超长时自动截断而不是挤压右侧 */
         .header-title-wrapper { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 8px; border-radius: 8px; transition: 0.2s; margin-left: -8px; flex: 1; min-width: 0; }
         .header-title-wrapper:active { background: #f2f2f7; }
         .header h1 { margin: 0; font-size: 18px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
         .edit-icon { font-size: 14px; opacity: 0.5; flex-shrink: 0; }
 
-        /* 🎯 修复1: 保护右侧按钮区不被压缩 */
         .header-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
         
         .action-btn {
@@ -43,7 +41,6 @@
         }
         .lang-select:active { transform: scale(0.95); }
 
-        /* 🎯 修复2: 顶部 padding 从 70px 增加到 95px，防止遮挡 */
         .transcript-container { 
             width: 100%; max-width: 800px; height: 100dvh;
             padding: calc(env(safe-area-inset-top, 20px) + 95px) 20px 160px; 
@@ -57,11 +54,6 @@
         .time-badge { font-size: 11px; color: #c7c7cc; font-family: monospace; }
         .original-text { font-size: 14px; color: #86868b; line-height: 1.5; font-weight: 400; }
         .translated-text { font-size: 18px; color: #1d1d1f; line-height: 1.5; font-weight: 500; }
-        .streaming-cursor { 
-            display: inline-block; width: 4px; height: 18px; background-color: #007aff; 
-            animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 4px;
-        }
-        @keyframes blink { 50% { opacity: 0; } }
 
         .control-dock {
             position: fixed; bottom: calc(env(safe-area-inset-bottom, 0px) + 80px); left: 50%; transform: translateX(-50%);
@@ -77,6 +69,9 @@
         
         .vad-indicator { width: 8px; height: 8px; border-radius: 50%; background: #34c759; opacity: 0.3; transition: 0.1s; flex-shrink: 0;}
         .vad-indicator.active { opacity: 1; box-shadow: 0 0 8px #34c759; }
+        
+        .thinking-pulse { animation: pulse 1.5s infinite; font-style: italic; color: #a1a1a6; font-size: 14px; }
+        @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
 
         .modal-overlay {
             display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -193,7 +188,6 @@
     let meetingSessions = [];
     let currentSessionId = null;
     let fullTranscript = []; 
-    const chatHistory = []; 
 
     function getDict() { return typeof I18N_DICT !== 'undefined' ? (I18N_DICT[nativeLangCode] || I18N_DICT["en"]) : {}; }
 
@@ -213,6 +207,7 @@
     }
 
     function cleanEmptySessions() {
+        // 清理空会话，但在 UI 端保持 pending 状态的数据不被误判为空
         meetingSessions = meetingSessions.filter(s => (s.data && s.data.length > 0) || s.id === currentSessionId);
         saveAllSessionsToStorage();
     }
@@ -221,7 +216,13 @@
         if (!currentSessionId) return;
         const session = meetingSessions.find(s => s.id === currentSessionId);
         if (session) {
-            session.data = [...fullTranscript];
+            // 🎯 核心变更：只保存已经完成 (非 pending) 的记录到 localStorage
+            session.data = fullTranscript.filter(t => !t.pending).map(c => ({
+                original: c.original,
+                translated: c.translated,
+                timestamp: c.timestamp,
+                detected_langs: c.detected_langs
+            }));
             saveAllSessionsToStorage();
         }
     }
@@ -281,7 +282,6 @@
         
         syncHeaderTitle();
         fullTranscript = session.data || [];
-        chatHistory.length = 0; 
         
         transcriptBox.innerHTML = '';
         const dict = getDict();
@@ -295,12 +295,9 @@
                 domBlock.innerHTML = `
                     <div class="time-badge">${turn.timestamp}</div>
                     <div class="original-text">${turn.original}</div>
-                    <div class="translated-text"><span class="t-content">${turn.translated}</span></div>
+                    <div class="translated-text">${turn.translated}</div>
                 `;
                 transcriptBox.appendChild(domBlock);
-                
-                chatHistory.push(turn);
-                if (chatHistory.length > 5) chatHistory.shift();
             });
             setTimeout(() => transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'auto' }), 50);
         }
@@ -463,8 +460,8 @@
     let isRecordingChunk = false;
     let audioChunks = [], silenceStartTime = 0, recordStartTime = 0, animationFrameId;
 
-    const VAD_THRESHOLD = 0.02;  
-    const SILENCE_LIMIT = 1000;  
+    const VAD_THRESHOLD = 0.04;  
+    const SILENCE_LIMIT = 800;  
     const MAX_RECORD_LIMIT = 20000; 
 
     const recordToggle = document.getElementById('recordToggle');
@@ -556,97 +553,78 @@
     }
 
     async function sendAudioChunk(audioBlob) {
+        // 🎯 核心修复：为每个块生成全局唯一的 ID
+        const chunkId = 'chunk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        const dict = getDict();
+        const thinkingText = nativeLangCode.startsWith('zh') ? "🧠 AI 正在融合与提炼..." : "🧠 AI is merging & refining...";
+
+        const hint = document.getElementById('initHint');
+        if (hint) hint.style.display = 'none';
+
+        // 🎯 核心修复1：在请求发出前，立刻在 DOM 中占位，绝对锁定视觉上的时序
+        let chunkBlock = document.createElement('div');
+        chunkBlock.className = 'record-block';
+        chunkBlock.id = chunkId;
+        chunkBlock.innerHTML = `<div class="thinking-pulse">${thinkingText}</div>`;
+        transcriptBox.appendChild(chunkBlock);
+        transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'smooth' });
+
+        // 🎯 核心修复2：在全量数据集中也插入一个带 pending 标记的占位对象
+        let currentTurn = { _id: chunkId, pending: true };
+        fullTranscript.push(currentTurn);
+
         const formData = new FormData();
         formData.append("audio_file", audioBlob, "chunk.webm");
         formData.append("target_lang", recordTargetLangCode);
         formData.append("debug", debug ? "true" : "false");
         
-        const apiHistory = chatHistory.slice(-5);
+        // 提取上下文明文，过滤掉仍在思考中的数据
+        const apiHistory = fullTranscript.filter(t => !t.pending).slice(-5);
         formData.append("chat_history", JSON.stringify(apiHistory));
 
         try {
-            const response = await fetch("/api/record_stream", { method: "POST", body: formData });
-            if (!response.ok) return;
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder("utf-8");
+            const response = await fetch("/api/record", { method: "POST", body: formData });
             
-            let domBlock = null;
-            let domTranslatedText = null;
-            let currentTurn = { original: "", translated: "", timestamp: "" };
-
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                
-                const events = decoder.decode(value, { stream: true }).split("\n\n");
-                for (const ev of events) {
-                    if (ev.startsWith("data: ")) {
-                        try {
-                            const payload = JSON.parse(ev.slice(6));
-                            
-                            if (payload.event === "thinking_start") {
-                                const hint = document.getElementById('initHint');
-                                if(hint) hint.style.display = 'none';
-                                
-                                let tempBlock = document.getElementById('tempThinkingBlock');
-                                if (!tempBlock) {
-                                    const dict = getDict();
-                                    const thinkingText = nativeLangCode.startsWith('zh') ? "🧠 AI 正在融合多个视角的记录..." : "🧠 AI is merging multiple perspectives...";
-                                    
-                                    tempBlock = document.createElement('div');
-                                    tempBlock.className = 'record-block';
-                                    tempBlock.id = 'tempThinkingBlock';
-                                    tempBlock.innerHTML = `<div class="original-text" style="font-style: italic; color: #a1a1a6;">${thinkingText}</div>`;
-                                    transcriptBox.appendChild(tempBlock);
-                                    transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'smooth' });
-                                }
-                            }
-                            else if (payload.event === "start") {
-                                const tempBlock = document.getElementById('tempThinkingBlock');
-                                if (tempBlock) tempBlock.remove();
-
-                                const timeStr = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                                currentTurn.original = payload.original_text; 
-                                currentTurn.timestamp = timeStr;
-                                currentTurn.detected_langs = payload.detected_langs || [];
-                                
-                                domBlock = document.createElement('div');
-                                domBlock.className = 'record-block';
-                                domBlock.innerHTML = `
-                                    <div class="time-badge">${timeStr}</div>
-                                    <div class="original-text">${payload.original_text}</div>
-                                    <div class="translated-text"><span class="t-content"></span><span class="streaming-cursor"></span></div>
-                                `;
-                                transcriptBox.appendChild(domBlock);
-                                domTranslatedText = domBlock.querySelector('.t-content');
-                                
-                                transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'smooth' });
-                            } 
-                            else if (payload.event === "token" && domTranslatedText) {
-                                currentTurn.translated += payload.text;
-                                domTranslatedText.innerText = currentTurn.translated;
-                                transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'smooth' });
-                            }
-                            else if (payload.event === "end") {
-                                if (payload.reason === "empty_audio") return; 
-                                
-                                if (domBlock) {
-                                    const cursor = domBlock.querySelector('.streaming-cursor');
-                                    if (cursor) cursor.remove();
-                                }
-                                
-                                chatHistory.push(currentTurn);
-                                if (chatHistory.length > 5) chatHistory.shift();
-                                
-                                fullTranscript.push(currentTurn);
-                                syncCurrentSession();
-                            }
-                        } catch (err) {}
-                    }
-                }
+            if (!response.ok) {
+                // 如果失败了，撤销该占位符
+                chunkBlock.remove();
+                fullTranscript = fullTranscript.filter(t => t._id !== chunkId);
+                const errData = await response.json();
+                console.error("API Error:", errData.error);
+                return;
             }
-        } catch (error) { console.error("API Error:", error); }
+
+            const payload = await response.json();
+            
+            if (payload.original && payload.original.length > 0) {
+                const timeStr = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                
+                // 🎯 核心修复3：直接锁定属于自己的坑位原位渲染文本，无视谁先返回
+                chunkBlock.innerHTML = `
+                    <div class="time-badge">${timeStr}</div>
+                    <div class="original-text">${payload.original}</div>
+                    <div class="translated-text">${payload.translation}</div>
+                `;
+                
+                // 原位解除数据数组的 pending 锁定并填充数据
+                currentTurn.pending = false;
+                currentTurn.original = payload.original;
+                currentTurn.translated = payload.translation;
+                currentTurn.timestamp = timeStr;
+                currentTurn.detected_langs = payload.detected_langs;
+
+                syncCurrentSession();
+                transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'smooth' });
+            } else {
+                chunkBlock.remove();
+                fullTranscript = fullTranscript.filter(t => t._id !== chunkId);
+            }
+
+        } catch (error) { 
+            console.error("Fetch Error:", error);
+            chunkBlock.remove();
+            fullTranscript = fullTranscript.filter(t => t._id !== chunkId);
+        }
     }
 
     window.onload = initUI;
