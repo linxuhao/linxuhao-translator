@@ -148,7 +148,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         # ----------------------------------------
         # Step 3: 请求大模型进行流式对话 (带思考状态透传与绝对首行修剪)
         # ----------------------------------------
-        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.6, "max_tokens": 1024, "thinking_token_budget": 60}
+        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.6, "max_tokens": 1260, "thinking_token_budget": 384}
 
         t_llm_start = time.time()
         full_reply_text = ""
@@ -169,23 +169,37 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
                             if is_thinking:
                                 thinking_buffer += delta
                                 
-                                # 💡 UX 优化：把思考的 token 发给前端，事件名设为 think_token
-                                # 前端收到这个事件，不要送给 TTS 发音，只在界面上渲染为浅灰色的斜体字，缓解用户的等待焦虑
-                                await chunk_queue.put({"event": "think_token", "text": delta})
-                                
                                 if "</think>" in thinking_buffer:
                                     is_thinking = False
                                     
-                                    # 截取 </think> 之后的内容
-                                    valid_chunk = thinking_buffer.split("</think>")[-1]
+                                    # 1. 物理切割：精确分离思考尾巴和正式发言
+                                    # 例如 delta = "答案。</think>\n<母语>"
+                                    parts = delta.split("</think>")
+                                    think_tail = parts[0]
                                     
-                                    # 🔒 极其冷酷的首字修剪：砍掉所有紧跟在 think 后面的换行和空格
-                                    if not has_started_speaking:
-                                        valid_chunk = valid_chunk.lstrip('\n\r ')
-                                        if valid_chunk:
-                                            has_started_speaking = True
-                                            await chunk_queue.put({"event": "token", "text": valid_chunk})
-                                            
+                                    # 2. 清洗掉 vLLM 强制注入的系统文本，保持前端纯净
+                                    think_tail = think_tail.replace("推理限额已达，我将直接输出确定性答案。", "")
+                                    
+                                    if think_tail:
+                                        await chunk_queue.put({"event": "think_token", "text": think_tail})
+                                        
+                                    # (可选) 发送一个思考结束的事件，方便前端在 UI 上做动画切换
+                                    await chunk_queue.put({"event": "think_end"})
+                                    
+                                    # 3. 处理 </think> 后面的正式内容
+                                    if len(parts) > 1:
+                                        valid_chunk = parts[1]
+                                        if not has_started_speaking:
+                                            valid_chunk = valid_chunk.lstrip('\n\r ')
+                                            if valid_chunk:
+                                                has_started_speaking = True
+                                                await chunk_queue.put({"event": "token", "text": valid_chunk})
+                                else:
+                                    # 还没遇到 </think>，直接清洗并推送思考过程
+                                    clean_delta = delta.replace("推理限额已达，我将直接输出确定性答案。", "")
+                                    if clean_delta:
+                                        await chunk_queue.put({"event": "think_token", "text": clean_delta})
+                                        
                             else:
                                 # 广播模式
                                 if not has_started_speaking:
