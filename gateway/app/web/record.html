@@ -185,6 +185,7 @@
     let debug = false;
     let nativeLangCode = 'zh';
     let recordTargetLangCode = 'zh';
+    let trasnlationTargetLangCode = 'fr';
     const transcriptBox = document.getElementById('transcriptBox');
     
     let meetingSessions = [];
@@ -209,7 +210,6 @@
     }
 
     function cleanEmptySessions() {
-        // 清理空会话，但在 UI 端保持 pending 状态的数据不被误判为空
         meetingSessions = meetingSessions.filter(s => (s.data && s.data.length > 0) || s.id === currentSessionId);
         saveAllSessionsToStorage();
     }
@@ -218,7 +218,6 @@
         if (!currentSessionId) return;
         const session = meetingSessions.find(s => s.id === currentSessionId);
         if (session) {
-            // 🎯 核心变更：只保存已经完成 (非 pending) 的记录到 localStorage
             session.data = fullTranscript.filter(t => !t.pending).map(c => ({
                 original: c.original,
                 translated: c.translated,
@@ -378,6 +377,7 @@
 
     function initUI() {
         nativeLangCode = localStorage.getItem('nativeLangPref') || 'zh';
+        trasnlationTargetLangCode = localStorage.getItem('targetLangPref') || 'fr';
         
         initLangSelector();
 
@@ -555,7 +555,6 @@
     }
 
     async function sendAudioChunk(audioBlob) {
-        // 🎯 核心修复：为每个块生成全局唯一的 ID
         const chunkId = 'chunk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         const dict = getDict();
         const thinkingText = nativeLangCode.startsWith('zh') ? "🧠 AI 正在融合与提炼..." : "🧠 AI is merging & refining...";
@@ -563,7 +562,6 @@
         const hint = document.getElementById('initHint');
         if (hint) hint.style.display = 'none';
 
-        // 🎯 核心修复1：在请求发出前，立刻在 DOM 中占位，绝对锁定视觉上的时序
         let chunkBlock = document.createElement('div');
         chunkBlock.className = 'record-block';
         chunkBlock.id = chunkId;
@@ -571,16 +569,20 @@
         transcriptBox.appendChild(chunkBlock);
         transcriptBox.scrollTo({ top: transcriptBox.scrollHeight, behavior: 'smooth' });
 
-        // 🎯 核心修复2：在全量数据集中也插入一个带 pending 标记的占位对象
         let currentTurn = { _id: chunkId, pending: true };
         fullTranscript.push(currentTurn);
 
         const formData = new FormData();
         formData.append("audio_file", audioBlob, "chunk.webm");
-        formData.append("target_lang", recordTargetLangCode);
+        
+        // 🎯 核心变更：适配新的 API 参数映射
+        // target_lang -> 用户的默认母语 (作为 ASR 抗噪锚定语言)
+        formData.append("target_lang", recordTargetLangCode); 
+        // target_translation_lang -> UI 顶部的下拉框选择的语言 (同传目标语)
+        formData.append("target_translation_lang", trasnlationTargetLangCode); 
+        
         formData.append("debug", debug ? "true" : "false");
         
-        // 提取上下文明文，过滤掉仍在思考中的数据
         const apiHistory = fullTranscript.filter(t => !t.pending).slice(-5);
         formData.append("chat_history", JSON.stringify(apiHistory));
 
@@ -588,7 +590,6 @@
             const response = await fetch("/api/record", { method: "POST", body: formData });
             
             if (!response.ok) {
-                // 如果失败了，撤销该占位符
                 chunkBlock.remove();
                 fullTranscript = fullTranscript.filter(t => t._id !== chunkId);
                 const errData = await response.json();
@@ -601,14 +602,12 @@
             if (payload.original && payload.original.length > 0) {
                 const timeStr = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 
-                // 🎯 核心修复3：直接锁定属于自己的坑位原位渲染文本，无视谁先返回
                 chunkBlock.innerHTML = `
                     <div class="time-badge">${timeStr}</div>
                     <div class="original-text">${payload.original}</div>
                     <div class="translated-text">${payload.translation}</div>
                 `;
                 
-                // 原位解除数据数组的 pending 锁定并填充数据
                 currentTurn.pending = false;
                 currentTurn.original = payload.original;
                 currentTurn.translated = payload.translation;
