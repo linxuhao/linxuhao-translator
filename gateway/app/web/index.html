@@ -20,20 +20,26 @@
             overflow: hidden; /* 绝对锁死最外层，禁止整个网页的橡皮筋回弹 */
         }
         
-        /* 顶部极简 Header */
-        .header { 
-            width: 100%; padding: env(safe-area-inset-top, 20px) 20px 10px; 
-            display: flex; justify-content: space-between; align-items: center; 
+        /* 顶部 Header (两行布局) */
+        .header {
+            width: 100%; padding: env(safe-area-inset-top, 20px) 16px 12px;
             background: rgba(245, 245, 247, 0.8); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
             z-index: 100; flex-shrink: 0; border-bottom: 1px solid rgba(0,0,0,0.05);
         }
-        .header-left { display: flex; flex-direction: column; gap: 4px; }
-        h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
-        .lang-indicator { font-size: 12px; color: #86868b; font-weight: 500; }
-        .lang-select { 
-            padding: 6px 12px; border-radius: 20px; border: none; font-size: 14px; font-weight: 600;
-            background: #e8e8ed; color: #1d1d1f; outline: none; appearance: none; text-align: center;
+        .header-row {
+            display: flex; justify-content: space-between; align-items: center;
         }
+        .header-title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+        .header-btn { background: none; border: none; font-size: 20px; cursor: pointer; padding: 4px; }
+        .lang-bar {
+            display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px;
+        }
+        .lang-select {
+            padding: 6px 14px; border-radius: 20px; border: none; font-size: 14px; font-weight: 600;
+            background: #e8e8ed; color: #1d1d1f; outline: none; appearance: none; text-align: center;
+            min-width: 80px;
+        }
+        .lang-arrow { font-size: 16px; color: #86868b; }
 
         .history-container { 
             width: 100%; max-width: 600px; 
@@ -127,13 +133,20 @@
 </head>
 <body>
     <div class="header">
-        <div class="header-left">
-            <h1 data-i18n="title">🗣️ 随身翻译</h1>
+        <div class="header-row">
+            <h1 class="header-title" data-i18n="title">🗣️ 随身翻译</h1>
+            <button id="exportBtn" class="header-btn" title="导出记录">💾</button>
         </div>
-        <div style="display: flex; gap: 12px; align-items: center;">
-            <button id="exportBtn" title="导出记录" style="background: none; border: none; font-size: 22px; cursor: pointer; padding: 0;">💾</button>
+        <div class="lang-bar">
             <select class="lang-select" id="nativeLang"></select>
+            <span class="lang-arrow">→</span>
+            <select class="lang-select" id="targetLang"></select>
         </div>
+    </div>
+
+    <!-- Language Suggestion Pill -->
+    <div id="langSuggestion" style="display: none; width: calc(100% - 32px); max-width: 568px; padding: 8px 14px; background: #fff3cd; border-radius: 10px; margin: 6px auto; cursor: pointer; text-align: center; font-size: 13px; color: #856404; box-shadow: 0 1px 4px rgba(0,0,0,0.06);">
+        <span id="suggestionText"></span>
     </div>
 
     <div class="history-container" id="historyList">
@@ -186,6 +199,6 @@
         </a>
     </div>
     <script src="/resources/i18n.js?v=1.8"></script>
-    <script src="/resources/app.js?v=2.5"></script>
+    <script src="/resources/app.js?v=2.6"></script>
 </body>
 </html>

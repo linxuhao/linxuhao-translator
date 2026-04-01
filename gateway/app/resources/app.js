@@ -6,8 +6,8 @@
 
 let debug = false;
 // --- 2. 核心状态机与常量 ---
-let translationQueue = []; 
-let currentForeignLang = "fr"; 
+let translationQueue = [];
+let targetLang = "fr"; // 目标语言：母语输入翻译到此语言
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 let audioContext, analyser, microphone, mediaRecorder;
@@ -15,7 +15,7 @@ let currentStream = null;
 let isVadActive = false, isRecordingChunk = false;
 let audioChunks = [], silenceStartTime = 0, recordStartTime = 0, animationFrameId;
 
-const VAD_THRESHOLD = 0.02;     
+const VAD_THRESHOLD = 0.04;     
 const SILENCE_NORMAL = 1200;    
 const SILENCE_EAGER = 600;      
 const EAGER_TRIGGER_TIME = 3000;
@@ -23,6 +23,7 @@ const MAX_RECORD_LIMIT = 10000;
 
 // --- 3. DOM 节点引用 ---
 const nativeLangSelect = document.getElementById('nativeLang');
+const targetLangSelect = document.getElementById('targetLang');
 const historyList = document.getElementById('historyList');
 const streamingBox = document.getElementById('streamingBox');
 const streamOriginal = document.getElementById('streamOriginal');
@@ -33,10 +34,13 @@ const vadLevelBar = document.getElementById('vadLevelBar');
 const vadLevelFill = document.getElementById('vadLevelFill');
 const langDisplay = document.getElementById('lang-display');
 const adminLink = document.getElementById('adminLink');
+const langSuggestion = document.getElementById('langSuggestion');
+const suggestionText = document.getElementById('suggestionText');
 
 // --- 4. 国际化渲染引擎 ---
 function renderLangOptions() {
     nativeLangSelect.innerHTML = SUPPORTED_LANGS.map(l => `<option value="${l.v}">${l.n}</option>`).join('');
+    targetLangSelect.innerHTML = SUPPORTED_LANGS.map(l => `<option value="${l.v}">${l.n}</option>`).join('');
 }
 
 
@@ -45,7 +49,7 @@ function syncHistoryToStorage() { localStorage.setItem('ttsQueueHistory', JSON.s
 
 function initStorageData() {
     renderLangOptions();
-    
+
     const savedLang = localStorage.getItem('nativeLangPref');
     if (savedLang) nativeLangSelect.value = savedLang;
     else {
@@ -55,17 +59,23 @@ function initStorageData() {
         localStorage.setItem('nativeLangPref', nativeLangSelect.value);
     }
 
-    applyUILanguage(nativeLangSelect.value);
-
-    if (nativeLangSelect.value === currentForeignLang) {
-        currentForeignLang = nativeLangSelect.value === "zh" ? "en" : "zh";
+    // 初始化目标语言
+    const savedTargetLang = localStorage.getItem('targetLangPref');
+    if (savedTargetLang) targetLang = savedTargetLang;
+    else {
+        // 默认目标语言：如果母语是中文则英语，否则中文
+        targetLang = nativeLangSelect.value === "zh" ? "en" : "zh";
+        localStorage.setItem('targetLangPref', targetLang);
     }
+    targetLangSelect.value = targetLang;
+
+    applyUILanguage(nativeLangSelect.value);
 
     const savedHistory = localStorage.getItem('ttsQueueHistory');
     if (savedHistory) {
         try {
             translationQueue = JSON.parse(savedHistory);
-            translationQueue.forEach(item => item.checked = false); 
+            translationQueue.forEach(item => item.checked = false);
             renderHistory();
         } catch (e) { translationQueue = []; }
     }
@@ -86,6 +96,26 @@ async function checkAdminStatus() {
 nativeLangSelect.addEventListener('change', (e) => {
     localStorage.setItem('nativeLangPref', e.target.value);
     applyUILanguage(e.target.value);
+    // 隐藏语言建议（母语变更时）
+    langSuggestion.style.display = 'none';
+});
+
+targetLangSelect.addEventListener('change', (e) => {
+    targetLang = e.target.value;
+    localStorage.setItem('targetLangPref', targetLang);
+    // 隐藏语言建议（用户已手动选择）
+    langSuggestion.style.display = 'none';
+});
+
+// 点击语言建议时更新目标语言
+langSuggestion.addEventListener('click', () => {
+    const detectedLang = langSuggestion.dataset.detectedLang;
+    if (detectedLang) {
+        targetLang = detectedLang;
+        targetLangSelect.value = detectedLang;
+        localStorage.setItem('targetLangPref', detectedLang);
+        langSuggestion.style.display = 'none';
+    }
 });
 
 // --- 6. UI 列表渲染 ---
@@ -346,8 +376,8 @@ function detectAudioLoop() {
 async function sendAudioChunkStream(audioBlob) {
     const formData = new FormData();
     formData.append("audio_file", audioBlob, "chunk.webm");
-    formData.append("native_lang", nativeLangSelect.value); 
-    formData.append("last_foreign_lang", currentForeignLang);
+    formData.append("native_lang", nativeLangSelect.value);
+    formData.append("target_lang", targetLang); // 目标语言：母语输入翻译到此语言
     formData.append("debug", debug ? "true" : "false");
     
     const recentHistory = translationQueue.slice(-3).map(item => ({
@@ -379,18 +409,24 @@ async function sendAudioChunkStream(audioBlob) {
                             streamItemData.original = payload.original_text;
                             streamItemData.sourceLang = payload.source_lang;
                             streamItemData.targetLang = payload.target_lang;
-                            
-                            if (payload.detected_foreign_lang && payload.detected_foreign_lang !== nativeLangSelect.value) {
-                                currentForeignLang = payload.detected_foreign_lang;
-                                // 使用多语言环境提示语
-                                const prefix = (I18N_DICT[nativeLangSelect.value] || I18N_DICT["zh"])["detecting"].split(":")[0];
-                                langDisplay.innerText = `${prefix}: ${currentForeignLang.toUpperCase()}`;
+
+                            // 如果检测到的外语与当前目标语言不同，显示建议
+                            if (payload.detected_foreign_lang &&
+                                payload.detected_foreign_lang !== nativeLangSelect.value &&
+                                payload.detected_foreign_lang !== targetLang) {
+                                const dict = I18N_DICT[nativeLangSelect.value] || I18N_DICT["zh"];
+                                const langName = SUPPORTED_LANGS.find(l => l.v === payload.detected_foreign_lang)?.n || payload.detected_foreign_lang;
+                                suggestionText.innerText = `${dict.detected_lang || "Detected"}: ${langName} → ${dict.suggestion_set_target || "Click to set as target"}`;
+                                langSuggestion.dataset.detectedLang = payload.detected_foreign_lang;
+                                langSuggestion.style.display = 'block';
+                            } else {
+                                langSuggestion.style.display = 'none';
                             }
-                            
+
                             streamOriginal.innerText = payload.original_text;
                             streamTranslated.innerText = "";
                             streamingBox.style.display = "flex";
-                            historyList.scrollTop = 0; // 🎯 视线锁定顶部
+                            historyList.scrollTop = 0;
                         } 
                         else if (payload.event === "token") {
                             streamTranslated.innerText += payload.text;
