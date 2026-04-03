@@ -18,8 +18,8 @@ let audioChunks = [], silenceStartTime = 0, recordStartTime = 0, animationFrameI
 const VAD_THRESHOLD = 0.04;     
 const SILENCE_NORMAL = 1200;    
 const SILENCE_EAGER = 600;      
-const EAGER_TRIGGER_TIME = 3000;
-const MAX_RECORD_LIMIT = 10000; 
+const EAGER_TRIGGER_TIME = 1500;
+const MAX_RECORD_LIMIT = 5000; 
 
 // --- 3. DOM 节点引用 ---
 const nativeLangSelect = document.getElementById('nativeLang');

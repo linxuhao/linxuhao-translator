@@ -209,13 +209,30 @@ async def record_endpoint(
 <translation>
 [针对 {target_lang_full_name} 的高质量翻译，或是免翻译的原文本复制]
 </translation>"""
-                user_prompt = f"""
-【当前语音的 ASR 候选版本】：
+                
+                # 🚨 核心重构：扁平化历史记录提取
+                history_context_text = ""
+                try:
+                    history_data = json.loads(chat_history)
+                    valid_history = [h for h in history_data if h.get("original") and h.get("translated")]
+                    if valid_history:
+                        history_context_text = "【最近几分钟的会议上下文】(仅供你熟悉当前讨论语境和专有名词，绝对禁止将这些内容写入本次的输出结果中！)：\n"
+                        # 会议场景保留最近 5 条即可，太多反而稀释对当前句子的注意力
+                        for i, h in enumerate(valid_history[-5:]):
+                            history_context_text += f"[{i+1}] 原文: {h['original']} -> 翻译: {h['translated']}\n"
+                        history_context_text += "\n"
+                except Exception: pass
+                
+                # 🚨 核心重构：将扁平化的历史记录前置于当前任务中
+                user_prompt = f"""{history_context_text}【当前语音的 ASR 候选版本】：
 {asr_descriptions}
 
 请按要求的 XML 格式输出融合与翻译结果。"""
 
-                messages = [{"role": "system", "content": system_prompt}]
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
                 
                 try:
                     history_data = json.loads(chat_history)

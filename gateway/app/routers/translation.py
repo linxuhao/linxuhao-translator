@@ -180,27 +180,31 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
 <<DISABLE_THINKING>>"""
 
         messages = [{"role": "system", "content": system_prompt}]
+        history_context_text = ""
 
         try:
             history_data = json.loads(chat_history_str)
-            valid_history = []
             is_couple_matched = detected_lang in [native_lang_base, target_lang, "unknown"]
 
             if is_couple_matched and len(history_data) > 0:
-                valid_history = [history_data[-1]]
+                last_turn = history_data[-1]
+                if last_turn.get("original") and last_turn.get("translated"):
+                    # 🚨 核心修复：不再添加 role: assistant，而是组装成防污染的纯文本参考块
+                    history_context_text = f"""【上一轮翻译记录】(仅供消歧义参考，绝不能重复翻译)：
+- 原文: {last_turn['original']}
+- 翻译: {last_turn['translated']}
+
+"""
             elif not is_couple_matched:
                 if debug: logger.warning(f"[{req_id}] ⚠️ 语种越界 ({detected_lang} ∉ {native_lang_base}/{target_lang}) -> 物理斩断记忆")
-
-            for h in valid_history:
-                if h.get("original") and h.get("translated"):
-                    messages.append({"role": "user", "content": h["original"]})
-                    messages.append({"role": "assistant", "content": h["translated"]})
         except Exception: pass
 
-        current_task_prompt = f"""【当前语音的 ASR 候选版本】(格式: [API调用模式] (lang: ASR底层检测语种) 识别文本)：
+        # 🚨 核心修复：将历史参考与当前任务强绑定，明确下达“绝对不要翻译上一轮”的死命令
+        current_task_prompt = f"""{history_context_text}【当前语音的 ASR 候选版本】(格式: [API调用模式] (lang: ASR底层检测语种) 识别文本)：
 {asr_options_text}
 
-请直接输出翻译结果。"""
+请直接输出当前语音的翻译结果。"""
+
         messages.append({"role": "user", "content": current_task_prompt})
 
         brain_payload = {
