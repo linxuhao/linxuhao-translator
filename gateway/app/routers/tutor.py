@@ -76,7 +76,8 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         if debug:
             logger.info(f"[{req_id}] 👨‍🏫 ASR 耗时: {int((time.time() - t_asr_start)*1000)}ms | 文本: '{asr_text}'")
         
-        
+        if debug:
+            logger.info(f"[{req_id}] native_lang: {native_lang}| native_lang_full_name: {native_lang_full_name}| target_lang: {target_lang}| target_lang_full_name: {target_lang_full_name}| ")
 
         if not asr_text or len(asr_text) < 1:
             await chunk_queue.put({"event": "end", "reason": "empty_audio"})
@@ -94,7 +95,8 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         # ==========================================
 
         if allow_native:
-            native_rule = f"""【双语输出规范】(物理级最高优)：
+            native_rule = f"""用户的母语是{native_lang_full_name}， 他要学习的外语是{target_lang_full_name},你只能用这两种语言和用户交谈
+            【双语输出规范】(物理级最高优)：
         - 说{native_lang_full_name}前，必须且只能输出 <母语> 标记。
         - 说{target_lang_full_name}前，必须且只能输出 <外语> 标记。
         - 绝对不要输出 </外语> 或 </母语> 这样的闭合标签！
@@ -103,14 +105,16 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         请根据用户的表现自然地切换策略，表现得像个善解人意的朋友，不要死板：
         1. 教任何内容之后都用{native_lang_full_name}解释
         2. ⚠️【不死磕原则 (核心)】：如果用户连续读错、觉得困难、沉默或明确表示不想学，绝对不要逼迫他重复！你应该立刻用<母语>安慰他（例如：“没关系，我们聊点别的”），**但是在你转移话题时，你自己依然要极其自然地说一两句简单的<外语>，保持外教的身份和语境浸润感。**
-        3. 当用户困惑或听不懂时：用<母语>解释你刚才的意思，并给出他可以怎么回答的提示。"""
+        3. 当用户困惑或听不懂时：用<母语>解释你刚才的意思，并给出他可以怎么回答的提示。
+        4. 在<think></think>之外，你可以使用的tag只有<母语> 标记和<外语> 标记。"""
             
             # 🧠 动态生成尾部强化指令（双语模式）
-            tail_instruction = f"\n\n[System_Override_复核]: 请用极简短的2-4句话回复。严格遵循标签规范且严禁闭合标签！绝对严禁用拼音/汉字标注发音！"
+            tail_instruction = f"\n\n[System_Override_复核]: 请用极简短的2-4句话回复。严格遵循标签规范且严禁闭合标签！绝对严禁标注发音！"
             
         else:
             native_rule = f"""【沉浸外语环境】：
         你必须且只能使用{target_lang_full_name}回复。每次输出前必须带有 <外语> 标记。
+        在<think> </think>之外，你可以使用的tag只有<外语> 标记。
         ⚠️ 绝对禁令：严禁输出 </外语> 闭合标签！绝对严禁使用{native_lang_full_name}。"""
             
             # 🧠 动态生成尾部强化指令（沉浸模式）
@@ -121,9 +125,10 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         规则：
         1. {native_rule}
         2. 【极致简短】：每次回复控制在 2-4 句话以内，极度口语化。严禁长篇大论的语法解释。
-        3. ⚠️【跨语种声学倒推引擎】：用户的语音由ASR转写。当收到极其突兀的{native_lang_full_name}输入时，必须优先在脑内进行“空耳解码”：这是否是用户在努力模仿{target_lang_full_name}，但因为口音极重被识别成了离谱的同音字？（例如：本意是"J'ai faim"，却被识别为"直接放"）。
+        3. ⚠️【跨语种声学倒推引擎】：用户的语音由ASR转写。当收到极其突兀的{native_lang_full_name}输入时，或者非{native_lang_full_name}和{target_lang_full_name}的语言输入时，必须优先在脑内进行“空耳解码”：这是否是用户在努力模仿{target_lang_full_name}，但因为口音极重被识别成了离谱的同音字？（例如：本意是"J'ai faim"，却被识别为"直接放"）。
         -> 应对策略：若判定为口音误听，请发挥同理心，温柔且自然地给出正确的{target_lang_full_name}示范。绝对严禁拆穿这是机器识别错误，也严禁向用户解释你的纠错推导过程，然后自然的继续下一段聊天/教学。
-        4. 【严禁注音】：只输出纯文本单词。绝对严禁用汉字或拼音标注发音（例如严禁写"bon-zhoor"）。"""
+        4. 【严禁注音】：只输出纯文本单词。绝对严禁标注发音（例如严禁写"bon-zhoor"）。
+        5. 避免要求重复太短的单词，太短的单词ASR容易听错"""
         messages = [{"role": "system", "content": system_prompt}]
         
         try:
@@ -146,9 +151,9 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         messages.append({"role": "user", "content": enhanced_user_input})
 
         # ----------------------------------------
-        # Step 3: 请求大模型进行流式对话 (带思考状态透传与绝对首行修剪)
+        # Step 3: 请求大模型进行流式对话
         # ----------------------------------------
-        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.6, "max_tokens": 1124, "thinking_token_budget": 124}
+        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.6, "max_tokens": 696, "thinking_token_budget": 196}
 
         t_llm_start = time.time()
         full_reply_text = ""
