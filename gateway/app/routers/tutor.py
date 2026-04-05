@@ -153,7 +153,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         # ----------------------------------------
         # Step 3: 请求大模型进行流式对话
         # ----------------------------------------
-        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.6, "max_tokens": 696, "thinking_token_budget": 196}
+        brain_payload = {"model": "qwen3", "messages": messages, "stream": True, "temperature": 0.6, "max_tokens": 628, "thinking_token_budget": 128}
 
         t_llm_start = time.time()
         full_reply_text = ""

@@ -27,7 +27,7 @@ services:
   # GPU 0 (7900 XTX): vLLM 推理引擎 (2026 SOTA 架构)
   # ==========================================
   vllm-qwen:
-    image: vllm/vllm-openai-rocm:nightly
+    image: vllm/vllm-openai-rocm:working-nightly #for support of --reasoning-config, it gets dropped on latest nightly
     container_name: vllm_qwen
     ports:
       - "8000:8000"
