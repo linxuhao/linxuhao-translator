@@ -4,14 +4,98 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a self-hosted AI translation gateway (随身翻译官/ShuiShen-Translator) that combines ASR (Qwen3-ASR) with LLM translation (Qwen3.5-27B) for real-time voice translation. It uses a heterogeneous dual-GPU architecture optimized for AMD ROCm.
+This is a self-hosted AI translation gateway (随身翻译官/ShuiShen-Translator) that combines ASR with LLM translation for real-time voice translation. It features **hardware-adaptive deployment** with named profiles in `config/hardware_profiles.yml`.
+
+## Installation
+
+### One-Command Install
+
+```bash
+# Auto-install everything and start
+./install.sh
+```
+
+The installer automatically handles:
+- **Phase 0**: Python3, venv, dependencies, Docker check/install
+- **Phase 1**: GPU hardware detection
+- **Phase 2**: Profile selection based on hardware
+- **Phase 3**: Configuration generation
+- **Phase 4**: Service deployment
+
+### Options
+
+```bash
+# View all available hardware profiles
+./install.sh --list-profiles
+
+# Use specific profile (skip auto-detection)
+./install.sh --profile nvidia_single_24gb
+./install.sh --profile amd_dual_40gb
+
+# Skip dependency installation (assume already installed)
+./install.sh --skip-deps
+
+# Dry run (show detection without deploying)
+./install.sh --dry-run
+
+# Generate config but don't start services
+./install.sh --no-start
+```
+
+### Supported OS
+
+| OS | Docker Install | Python Install |
+|----|----------------|----------------|
+| Ubuntu/Debian | apt + docker repo | apt |
+| Fedora/RHEL | dnf + docker repo | dnf |
+| Arch Linux | pacman | pacman |
+| macOS | Homebrew (Docker Desktop) | Homebrew |
+
+### Hardware Profiles
+
+All configurations are defined in `config/hardware_profiles.yml`. Profiles are named by vendor and VRAM:
+
+| Vendor | Single GPU | Dual GPU |
+|--------|-----------|----------|
+| **NVIDIA** | `nvidia_single_6gb`, `8gb`, `12gb`, `16gb`, `24gb`, `32gb_plus` | `nvidia_dual_16gb`, `24gb`, `40gb`, `48gb_plus` |
+| **AMD** | `amd_single_8gb`, `12gb`, `16gb`, `20gb`, `24gb` | `amd_dual_24gb`, `32gb`, `40gb`, `48gb_plus` |
+| **Apple** | `apple_8gb`, `16gb`, `24gb`, `32gb_plus` | (single only) |
+| **Intel** | `intel_single_6gb`, `8gb`, `16gb` | (single only) |
+
+### Model Selection per Profile
+
+Each profile specifies:
+- `llm_model`: LLM for translation (Qwen3.x variants)
+- `asr_model`: ASR engine (Qwen3-ASR or Whisper)
+- `llm_gpu_util`, `asr_gpu_util`: GPU memory allocation
+- `max_concurrent`: Concurrent request limit
+- `max_model_len`: Context length
+
+### Customizing Profiles
+
+Edit `config/hardware_profiles.yml` to add or modify profiles:
+
+```yaml
+profiles:
+  my_custom_profile:
+    name: "My Custom Setup"
+    vendor: nvidia
+    gpu_count: 1
+    min_vram_mb: 18000
+    max_vram_mb: 22000
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.60
+    asr_gpu_util: 0.30
+    max_concurrent: 16
+```
 
 ## Commands
 
 ### Development
 
 ```bash
-# Start all services (first boot downloads models ~30B + 1.7B)
+# Start all services
 docker compose up -d
 
 # Rebuild gateway after code changes
@@ -107,8 +191,32 @@ Responses use XML-like tags: `<language>`, `<original>`, `<translation>`. Parsin
 
 ## GPU Configuration
 
-AMD ROCm dual-GPU setup:
-- GPU 0 (7900 XTX): `HIP_VISIBLE_DEVICES=0` for vllm-qwen
-- GPU 1 (7800 XT): `HIP_VISIBLE_DEVICES=1` for qwen3-asr
+GPU configuration is managed via **named profiles** in `config/hardware_profiles.yml`:
 
-For NVIDIA, change base images from `vllm/vllm-openai-rocm` to `vllm/vllm-openai`.
+- Run `./install.sh` to auto-select the best profile for your hardware
+- Run `./install.sh --list-profiles` to see all available profiles
+- Run `./install.sh --profile <name>` to use a specific profile
+
+Generated configuration is stored in `config/generated/hardware.env`.
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `config/hardware_profiles.yml` | All hardware profile definitions |
+| `config/generated/hardware.env` | Auto-generated hardware config |
+| `docker-compose.yml` | Auto-generated deployment config |
+| `docker-compose.example.yml` | Original hardcoded config (reference) |
+
+### Manual Override
+
+```bash
+# Select specific profile
+./install.sh --profile nvidia_single_24gb
+
+# Or edit hardware.env and regenerate
+vim config/generated/hardware.env
+python3 scripts/generate_config.py \
+    --env config/generated/hardware.env \
+    --output docker-compose.yml
+```

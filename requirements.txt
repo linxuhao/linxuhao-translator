@@ -1,0 +1,3 @@
+# VIP Gateway Installer Scripts Requirements
+# Used by scripts/select_profile.py and scripts/generate_config.py
+pyyaml>=6.0

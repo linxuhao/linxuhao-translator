@@ -1,0 +1,463 @@
+# VIP Gateway Hardware Profiles Configuration
+#
+# This file defines hardware-specific deployment configurations.
+# Each profile specifies the optimal model selection and parameters
+# for a given hardware setup.
+#
+# Usage:
+#   ./install.sh                    # Auto-detect and select best profile
+#   ./install.sh --profile NAME     # Use specific profile
+#   ./install.sh --list-profiles    # Show all available profiles
+
+# ==========================================
+# Vendor-Specific Configuration
+# ==========================================
+vendors:
+  nvidia:
+    name: NVIDIA
+    image: vllm/vllm-openai:latest
+    env_var: CUDA_VISIBLE_DEVICES
+    devices: []
+    group_add: []
+
+  amd:
+    name: AMD ROCm
+    image: vllm/vllm-openai-rocm:latest
+    env_var: HIP_VISIBLE_DEVICES
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+
+  apple:
+    name: Apple Silicon
+    image: vllm/vllm-openai:latest
+    env_var: METAL_DEVICE_ID
+    devices: []
+    group_add: []
+    note: "Metal acceleration auto-detected on macOS"
+
+  intel:
+    name: Intel Arc
+    image: vllm/vllm-openai:latest
+    env_var: ONEAPI_DEVICE_SELECTOR
+    devices: []
+    group_add: []
+    note: "Requires Intel Compute Runtime (OpenCL/SYCL)"
+
+# ==========================================
+# Hardware Profiles
+# ==========================================
+profiles:
+  # ---------- Apple Silicon ----------
+  apple_8gb:
+    name: "Apple Silicon 8GB (M1/M2 Base)"
+    description: "Basic M-series chip with 8GB unified memory"
+    vendor: apple
+    gpu_count: 1
+    min_vram_mb: 6000
+    max_vram_mb: 12000
+    strategy: single_small
+    llm_model: Qwen/Qwen3-7B-GPTQ-Int4
+    asr_model: openai/whisper-large-v3-turbo
+    llm_gpu_util: 0.50
+    asr_gpu_util: 0.30
+    max_concurrent: 8
+    max_model_len: 2048
+
+  apple_16gb:
+    name: "Apple Silicon 16GB (M1/M2 Pro)"
+    description: "Pro-level M-series with 16GB unified memory"
+    vendor: apple
+    gpu_count: 1
+    min_vram_mb: 14000
+    max_vram_mb: 22000
+    strategy: single_mid
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.55
+    asr_gpu_util: 0.30
+    max_concurrent: 16
+    max_model_len: 4096
+
+  apple_24gb:
+    name: "Apple Silicon 24GB (M1/M2/M3 Max)"
+    description: "Max-level M-series with 24GB unified memory"
+    vendor: apple
+    gpu_count: 1
+    min_vram_mb: 22000
+    max_vram_mb: 30000
+    strategy: single_large
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.60
+    asr_gpu_util: 0.25
+    max_concurrent: 24
+    max_model_len: 4096
+
+  apple_32gb_plus:
+    name: "Apple Silicon 32GB+ (M1/M2/M3 Ultra)"
+    description: "Ultra-level M-series with 32GB+ unified memory"
+    vendor: apple
+    gpu_count: 1
+    min_vram_mb: 30000
+    strategy: apple_ultra
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.70
+    asr_gpu_util: 0.20
+    max_concurrent: 32
+    max_model_len: 8192
+
+  # ---------- NVIDIA Single GPU ----------
+  nvidia_single_6gb:
+    name: "NVIDIA Single 6GB (RTX 2060/3050)"
+    description: "Entry-level NVIDIA GPU with limited VRAM"
+    vendor: nvidia
+    gpu_count: 1
+    min_vram_mb: 5000
+    max_vram_mb: 8000
+    strategy: single_tiny
+    llm_model: Qwen/Qwen2.5-3B-GPTQ-Int4
+    asr_model: openai/whisper-medium
+    llm_gpu_util: 0.50
+    asr_gpu_util: 0.35
+    max_concurrent: 6
+    max_model_len: 1024
+
+  nvidia_single_8gb:
+    name: "NVIDIA Single 8GB (RTX 3060/4060)"
+    description: "Budget-level NVIDIA GPU"
+    vendor: nvidia
+    gpu_count: 1
+    min_vram_mb: 7000
+    max_vram_mb: 11000
+    strategy: single_small
+    llm_model: Qwen/Qwen3-7B-GPTQ-Int4
+    asr_model: openai/whisper-large-v3-turbo
+    llm_gpu_util: 0.55
+    asr_gpu_util: 0.30
+    max_concurrent: 8
+    max_model_len: 2048
+
+  nvidia_single_12gb:
+    name: "NVIDIA Single 12GB (RTX 3060 12GB/4070)"
+    description: "Mid-range NVIDIA with decent VRAM"
+    vendor: nvidia
+    gpu_count: 1
+    min_vram_mb: 11000
+    max_vram_mb: 15000
+    strategy: single_mid_low
+    llm_model: Qwen/Qwen3-7B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.50
+    asr_gpu_util: 0.35
+    max_concurrent: 12
+    max_model_len: 2048
+
+  nvidia_single_16gb:
+    name: "NVIDIA Single 16GB (RTX 4080)"
+    description: "High-end consumer NVIDIA GPU"
+    vendor: nvidia
+    gpu_count: 1
+    min_vram_mb: 15000
+    max_vram_mb: 20000
+    strategy: single_mid
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.55
+    asr_gpu_util: 0.30
+    max_concurrent: 16
+    max_model_len: 4096
+
+  nvidia_single_24gb:
+    name: "NVIDIA Single 24GB (RTX 3090/4090)"
+    description: "Flagship consumer NVIDIA GPU"
+    vendor: nvidia
+    gpu_count: 1
+    min_vram_mb: 22000
+    max_vram_mb: 28000
+    strategy: single_large
+    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.60
+    asr_gpu_util: 0.25
+    max_concurrent: 32
+    max_model_len: 4096
+
+  nvidia_single_32gb_plus:
+    name: "NVIDIA Single 32GB+ (RTX 6000 Ada/A100)"
+    description: "Professional/workstation NVIDIA GPU"
+    vendor: nvidia
+    gpu_count: 1
+    min_vram_mb: 30000
+    strategy: single_flagship
+    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.70
+    asr_gpu_util: 0.20
+    max_concurrent: 48
+    max_model_len: 8192
+
+  # ---------- NVIDIA Dual GPU ----------
+  nvidia_dual_16gb:
+    name: "NVIDIA Dual 16GB (8GB + 8GB)"
+    description: "Two budget NVIDIA GPUs"
+    vendor: nvidia
+    gpu_count: 2
+    min_total_vram_mb: 14000
+    max_total_vram_mb: 18000
+    strategy: dual_entry
+    llm_model: Qwen/Qwen3-7B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.85
+    asr_gpu_util: 0.85
+    max_concurrent: 16
+    max_model_len: 2048
+
+  nvidia_dual_24gb:
+    name: "NVIDIA Dual 24GB (12GB + 12GB or 16GB + 8GB)"
+    description: "Two mid-range NVIDIA GPUs"
+    vendor: nvidia
+    gpu_count: 2
+    min_total_vram_mb: 20000
+    max_total_vram_mb: 28000
+    strategy: dual_mainstream
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.85
+    asr_gpu_util: 0.85
+    max_concurrent: 24
+    max_model_len: 4096
+
+  nvidia_dual_40gb:
+    name: "NVIDIA Dual 40GB (24GB + 16GB)"
+    description: "Flagship + high-end NVIDIA combination"
+    vendor: nvidia
+    gpu_count: 2
+    min_total_vram_mb: 36000
+    max_total_vram_mb: 44000
+    strategy: dual_flagship
+    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.85
+    asr_gpu_util: 0.85
+    max_concurrent: 48
+    max_model_len: 4096
+
+  nvidia_dual_48gb_plus:
+    name: "NVIDIA Dual 48GB+ (24GB + 24GB or better)"
+    description: "Two flagship/pro NVIDIA GPUs"
+    vendor: nvidia
+    gpu_count: 2
+    min_total_vram_mb: 44000
+    strategy: dual_ultra
+    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.85
+    asr_gpu_util: 0.85
+    max_concurrent: 64
+    max_model_len: 8192
+
+  # ---------- AMD Single GPU ----------
+  amd_single_8gb:
+    name: "AMD Single 8GB (RX 6600/6650 XT)"
+    description: "Budget AMD GPU"
+    vendor: amd
+    gpu_count: 1
+    min_vram_mb: 7000
+    max_vram_mb: 10000
+    strategy: single_small
+    llm_model: Qwen/Qwen3-7B-GPTQ-Int4
+    asr_model: openai/whisper-large-v3-turbo
+    llm_gpu_util: 0.55
+    asr_gpu_util: 0.30
+    max_concurrent: 8
+    max_model_len: 2048
+
+  amd_single_12gb:
+    name: "AMD Single 12GB (RX 6700 XT/6750 XT)"
+    description: "Mid-range AMD GPU"
+    vendor: amd
+    gpu_count: 1
+    min_vram_mb: 11000
+    max_vram_mb: 14000
+    strategy: single_mid_low
+    llm_model: Qwen/Qwen3-7B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.50
+    asr_gpu_util: 0.35
+    max_concurrent: 12
+    max_model_len: 2048
+
+  amd_single_16gb:
+    name: "AMD Single 16GB (RX 6800/7800 XT)"
+    description: "High-end consumer AMD GPU"
+    vendor: amd
+    gpu_count: 1
+    min_vram_mb: 15000
+    max_vram_mb: 18000
+    strategy: single_mid
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.55
+    asr_gpu_util: 0.30
+    max_concurrent: 16
+    max_model_len: 4096
+
+  amd_single_20gb:
+    name: "AMD Single 20GB (RX 7900 XT)"
+    description: "Near-flagship AMD GPU"
+    vendor: amd
+    gpu_count: 1
+    min_vram_mb: 19000
+    max_vram_mb: 22000
+    strategy: single_large
+    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.60
+    asr_gpu_util: 0.25
+    max_concurrent: 24
+    max_model_len: 4096
+
+  amd_single_24gb:
+    name: "AMD Single 24GB (RX 7900 XTX)"
+    description: "Flagship AMD GPU"
+    vendor: amd
+    gpu_count: 1
+    min_vram_mb: 23000
+    strategy: single_large
+    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.60
+    asr_gpu_util: 0.25
+    max_concurrent: 32
+    max_model_len: 4096
+
+  # ---------- AMD Dual GPU ----------
+  amd_dual_24gb:
+    name: "AMD Dual 24GB (12GB + 12GB)"
+    description: "Two mid-range AMD GPUs"
+    vendor: amd
+    gpu_count: 2
+    min_total_vram_mb: 22000
+    max_total_vram_mb: 28000
+    strategy: dual_entry
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.85
+    asr_gpu_util: 0.85
+    max_concurrent: 24
+    max_model_len: 4096
+
+  amd_dual_32gb:
+    name: "AMD Dual 32GB (16GB + 16GB)"
+    description: "Two high-end AMD GPUs"
+    vendor: amd
+    gpu_count: 2
+    min_total_vram_mb: 30000
+    max_total_vram_mb: 36000
+    strategy: dual_mainstream
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.85
+    asr_gpu_util: 0.85
+    max_concurrent: 32
+    max_model_len: 4096
+
+  amd_dual_40gb:
+    name: "AMD Dual 40GB (7900 XTX + 7800 XT)"
+    description: "Flagship + high-end AMD combination"
+    vendor: amd
+    gpu_count: 2
+    min_total_vram_mb: 38000
+    max_total_vram_mb: 44000
+    strategy: dual_flagship
+    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.85
+    asr_gpu_util: 0.85
+    max_concurrent: 64
+    max_model_len: 4096
+
+  amd_dual_48gb_plus:
+    name: "AMD Dual 48GB+ (7900 XTX + 7900 XTX)"
+    description: "Two flagship AMD GPUs"
+    vendor: amd
+    gpu_count: 2
+    min_total_vram_mb: 44000
+    strategy: dual_ultra
+    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.85
+    asr_gpu_util: 0.85
+    max_concurrent: 64
+    max_model_len: 8192
+
+  # ---------- Intel Arc ----------
+  intel_single_6gb:
+    name: "Intel Arc 6GB (A380)"
+    description: "Entry-level Intel Arc"
+    vendor: intel
+    gpu_count: 1
+    min_vram_mb: 5000
+    max_vram_mb: 7000
+    strategy: single_tiny
+    llm_model: Qwen/Qwen2.5-3B-GPTQ-Int4
+    asr_model: openai/whisper-medium
+    llm_gpu_util: 0.60
+    asr_gpu_util: 0.30
+    max_concurrent: 6
+    max_model_len: 1024
+
+  intel_single_8gb:
+    name: "Intel Arc 8GB (A750)"
+    description: "Mid-range Intel Arc"
+    vendor: intel
+    gpu_count: 1
+    min_vram_mb: 7000
+    max_vram_mb: 10000
+    strategy: single_small
+    llm_model: Qwen/Qwen3-7B-GPTQ-Int4
+    asr_model: openai/whisper-large-v3-turbo
+    llm_gpu_util: 0.60
+    asr_gpu_util: 0.30
+    max_concurrent: 8
+    max_model_len: 2048
+
+  intel_single_16gb:
+    name: "Intel Arc 16GB (A770)"
+    description: "High-end Intel Arc"
+    vendor: intel
+    gpu_count: 1
+    min_vram_mb: 15000
+    max_vram_mb: 18000
+    strategy: single_mid
+    llm_model: Qwen/Qwen3-14B-GPTQ-Int4
+    asr_model: Qwen/Qwen3-ASR-1.7B
+    llm_gpu_util: 0.55
+    asr_gpu_util: 0.30
+    max_concurrent: 16
+    max_model_len: 4096
+
+# ==========================================
+# Profile Matching Rules
+# ==========================================
+matching:
+  # Priority order for profile matching
+  # First match wins (more specific profiles should come first)
+  priority:
+    - exact_profile   # User specified --profile
+    - dual_gpu        # Match dual GPU by total VRAM
+    - single_gpu      # Match single GPU by VRAM
+    - fallback        # Lowest spec that works
+
+  # Fallback profile when no match found
+  fallback: nvidia_single_6gb
+
+  # Minimum requirements
+  minimum:
+    vram_mb: 5000
+    message: "GPU must have at least 5GB VRAM for basic operation"
