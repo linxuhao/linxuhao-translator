@@ -8,19 +8,37 @@ This is a self-hosted AI translation gateway (随身翻译官/ShuiShen-Translato
 
 ## Installation
 
-### One-Command Install
+### One-Line Install (New Machine)
 
 ```bash
-# Auto-install everything and start
+# Clone and install everything automatically
+curl -fsSL https://raw.githubusercontent.com/linxuhao/vip-gateway/main/bootstrap.sh | bash
+
+# Or with options
+curl -fsSL https://raw.githubusercontent.com/linxuhao/vip-gateway/main/bootstrap.sh | bash -s -- --profile nvidia_single_24gb
+curl -fsSL https://raw.githubusercontent.com/linxuhao/vip-gateway/main/bootstrap.sh | bash -s -- --dry-run
+```
+
+This will:
+1. Clone the repository to `./vip-gateway/`
+2. Run `install.sh` with all its phases
+
+### Manual Install (After Clone)
+
+```bash
+git clone https://github.com/linxuhao/vip-gateway.git
+cd vip-gateway
 ./install.sh
 ```
 
+### Install Phases
+
 The installer automatically handles:
-- **Phase 0**: Python3, venv, dependencies, Docker check/install
-- **Phase 1**: GPU hardware detection
-- **Phase 2**: Profile selection based on hardware
-- **Phase 3**: Configuration generation
-- **Phase 4**: Service deployment
+- **Phase 0**: Python3, venv, dependencies (PyYAML), Docker check/install
+- **Phase 1**: GPU hardware detection (vendor, count, VRAM)
+- **Phase 2**: Profile selection from `config/hardware_profiles.yml`
+- **Phase 3**: Configuration generation (docker-compose.yml)
+- **Phase 4**: Service deployment (pull images, build gateway, start)
 
 ### Options
 
