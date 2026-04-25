@@ -248,10 +248,10 @@ async def record_endpoint(
                     "model": "qwen3",
                     "messages": messages,
                     "max_tokens": 1280,
-                    "temperature": 0.7,
-                    "top_p": 0.9,
-                    "top_k": 40,
-                    "thinking_token_budget": 512
+                    "temperature":0.6, "top_p":0.95, "top_k":20, "min_p":0.0, "presence_penalty":0.0, "repetition_penalty":1.0,
+                    "extra_body": {
+                        "chat_template_kwargs": {"enable_thinking": True}
+                    }
                 }
                 
                 t_llm_start = time.time()

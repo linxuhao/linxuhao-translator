@@ -27,7 +27,7 @@ services:
   # GPU 0 (7900 XTX): vLLM 推理引擎 (2026 SOTA 架构)
   # ==========================================
   vllm-qwen:
-    image: vllm/vllm-openai-rocm:working-nightly #for support of --reasoning-config, it gets dropped on latest nightly
+    image: vllm/vllm-openai-rocm:latest #for support of --reasoning-config, it gets dropped on latest nightly
     container_name: vllm_qwen
     ports:
       - "8000:8000"
@@ -48,17 +48,14 @@ services:
     entrypoint: []
     # 【关键修复 2】：手动指定 bash 执行环境
     command: >
-      vllm serve codgician/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GPTQ-int4
+      vllm serve groxaxo/Qwen3.6-27B-GPTQ-Pro-4bit
       --dtype float16
+      --disable-custom-all-reduce
       --max-model-len 8192
       --gpu-memory-utilization 0.99
       --language-model-only
       --max-num-seqs 80
       --chat-template /app/thinking.jinja
-      --disable-sliding-window
-      --enable-prefix-caching
-      --enforce-eager
-      --reasoning-config '{"think_start_str": "<think>", "think_end_str": "推理限额已达，我将直接输出确定性答案。</think>"}'
       --served-model-name qwen3
       --trust-remote-code
     restart: unless-stopped

@@ -71,6 +71,7 @@ def generate_llm_command(env: dict) -> str:
     model = env.get('LLM_MODEL', 'Qwen/Qwen3-14B-GPTQ-Int4')
     gpu_util = env.get('LLM_GPU_UTIL', '0.85')
     max_len = env.get('LLM_MAX_MODEL_LEN', '4096')
+    extra_args = env.get('LLM_EXTRA_ARGS', '')
 
     cmd_parts = [
         'vllm serve', model,
@@ -80,6 +81,9 @@ def generate_llm_command(env: dict) -> str:
         '--served-model-name qwen3',
         '--trust-remote-code',
     ]
+
+    if extra_args:
+        cmd_parts.append(extra_args)
 
     return ' '.join(cmd_parts)
 

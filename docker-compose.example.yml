@@ -24,71 +24,53 @@ services:
     restart: unless-stopped
 
   # ==========================================
-  # GPU 0 (7900 XTX): vLLM 推理引擎 (2026 SOTA 架构)
+  # GPU 0: vLLM 推理引擎 (Qwen3.6-27B)
+  # 支持三种模式: thinking(默认)/instruct/non-thinking
+  # 配置项:
+  #   - chat_template_kwargs.enable_thinking: True  = 思考模式 (默认)
+  #   - chat_template_kwargs.enable_thinking: False = 直接回复模式
+  #   - chat_template_kwargs.preserve_thinking: True = 保留历史推理
   # ==========================================
   vllm-qwen:
-    image: vllm/vllm-openai-rocm:working-nightly #for support of --reasoning-config, it gets dropped on latest nightly
+    image: vllm/vllm-openai:latest
     container_name: vllm_qwen
     ports:
       - "8000:8000"
-    devices:
-      - "/dev/kfd:/dev/kfd"
-      - "/dev/dri:/dev/dri"
-    group_add:
-      - video
-      - render
     environment:
-      - HIP_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
       - VLLM_USE_TRITON_AWQ=1
-      - FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
-      - ./qwen3.5/thinking.jinja:/app/thinking.jinja
     entrypoint: []
-    # 【关键修复 2】：手动指定 bash 执行环境
     command: >
-      vllm serve codgician/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GPTQ-int4
+      vllm serve Qwen/Qwen3.6-27B-GPTQ-Int4
       --dtype float16
       --max-model-len 8192
-      --gpu-memory-utilization 0.99
+      --gpu-memory-utilization 0.85
       --language-model-only
       --max-num-seqs 80
-      --chat-template /app/thinking.jinja
-      --disable-sliding-window
-      --enable-prefix-caching
-      --enforce-eager
-      --reasoning-config '{"think_start_str": "<think>", "think_end_str": "推理限额已达，我将直接输出确定性答案。</think>"}'
       --served-model-name qwen3
       --trust-remote-code
     restart: unless-stopped
 
- # ==========================================
-# 文件名: docker-compose.audio.yml
-# 架构定位: GPU 1 (7800 XT) - 纯正 ROCm 原生听觉与发声节点
-# ==========================================
+  # ==========================================
+  # GPU 1: Qwen3-ASR 语音识别
+  # ==========================================
   qwen3-asr:
-    build:
-        context: ./qwen3-asr
+    image: vllm/vllm-openai:latest
     container_name: qwen3_asr
     ports:
       - "9000:8000"
-    devices:
-      - "/dev/kfd:/dev/kfd"
-      - "/dev/dri:/dev/dri"
-    group_add:
-      - video
-      - render
     environment:
-      - HIP_VISIBLE_DEVICES=1
+      - CUDA_VISIBLE_DEVICES=1
       - VLLM_USE_TRITON_AWQ=1
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     entrypoint: []
-    # 【关键修复 2】：手动指定 bash 执行环境
     command: >
-      vllm serve Qwen/Qwen3-ASR-1.7B     
+      vllm serve Qwen/Qwen3-ASR-1.7B
       --dtype float16
       --max-model-len 8192
       --gpu-memory-utilization 0.85

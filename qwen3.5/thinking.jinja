@@ -5,9 +5,11 @@
 {# 架构定位: 特洛伊木马嗅探模板 (绕过 vLLM API 丢包限制) #}
 {# ========================================== #}
 
-{# 🎯 物理嗅探：默认开启思考。如果系统指令里藏了暗号，立刻切断思考神经！ #}
+{# 🎯 物理嗅探：默认开启思考。从 chat_template_kwargs 读取 enable_thinking #}
 {%- set enable_thinking = true %}
-{%- if messages[0].role == 'system' and '<<DISABLE_THINKING>>' in messages[0].content %}
+{%- if chat_template_kwargs and 'enable_thinking' in chat_template_kwargs %}
+    {%- set enable_thinking = chat_template_kwargs.enable_thinking %}
+{%- elif messages[0].role == 'system' and '<<DISABLE_THINKING>>' in messages[0].content %}
     {%- set enable_thinking = false %}
 {%- endif %}
 

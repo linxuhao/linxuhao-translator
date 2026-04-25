@@ -180,12 +180,13 @@ profiles:
     min_vram_mb: 22000
     max_vram_mb: 28000
     strategy: single_large
-    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    llm_model: Qwen/Qwen3.6-27B-GPTQ-Int4
     asr_model: Qwen/Qwen3-ASR-1.7B
     llm_gpu_util: 0.60
     asr_gpu_util: 0.25
     max_concurrent: 32
     max_model_len: 4096
+    llm_extra_args: "--language-model-only"
 
   nvidia_single_32gb_plus:
     name: "NVIDIA Single 32GB+ (RTX 6000 Ada/A100)"
@@ -194,12 +195,13 @@ profiles:
     gpu_count: 1
     min_vram_mb: 30000
     strategy: single_flagship
-    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    llm_model: Qwen/Qwen3.6-27B-GPTQ-Int4
     asr_model: Qwen/Qwen3-ASR-1.7B
     llm_gpu_util: 0.70
     asr_gpu_util: 0.20
     max_concurrent: 48
     max_model_len: 8192
+    llm_extra_args: "--language-model-only"
 
   # ---------- NVIDIA Dual GPU ----------
   nvidia_dual_16gb:
@@ -240,12 +242,13 @@ profiles:
     min_total_vram_mb: 36000
     max_total_vram_mb: 44000
     strategy: dual_flagship
-    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    llm_model: Qwen/Qwen3.6-27B-GPTQ-Int4
     asr_model: Qwen/Qwen3-ASR-1.7B
     llm_gpu_util: 0.85
     asr_gpu_util: 0.85
     max_concurrent: 48
     max_model_len: 4096
+    llm_extra_args: "--language-model-only"
 
   nvidia_dual_48gb_plus:
     name: "NVIDIA Dual 48GB+ (24GB + 24GB or better)"
@@ -254,12 +257,13 @@ profiles:
     gpu_count: 2
     min_total_vram_mb: 44000
     strategy: dual_ultra
-    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    llm_model: Qwen/Qwen3.6-27B-GPTQ-Int4
     asr_model: Qwen/Qwen3-ASR-1.7B
     llm_gpu_util: 0.85
     asr_gpu_util: 0.85
     max_concurrent: 64
     max_model_len: 8192
+    llm_extra_args: "--language-model-only"
 
   # ---------- AMD Single GPU ----------
   amd_single_8gb:
@@ -315,12 +319,13 @@ profiles:
     min_vram_mb: 19000
     max_vram_mb: 22000
     strategy: single_large
-    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    llm_model: Qwen/Qwen3.6-27B-GPTQ-Int4
     asr_model: Qwen/Qwen3-ASR-1.7B
     llm_gpu_util: 0.60
     asr_gpu_util: 0.25
     max_concurrent: 24
     max_model_len: 4096
+    llm_extra_args: "--language-model-only"
 
   amd_single_24gb:
     name: "AMD Single 24GB (RX 7900 XTX)"
@@ -329,12 +334,13 @@ profiles:
     gpu_count: 1
     min_vram_mb: 23000
     strategy: single_large
-    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    llm_model: Qwen/Qwen3.6-27B-GPTQ-Int4
     asr_model: Qwen/Qwen3-ASR-1.7B
     llm_gpu_util: 0.60
     asr_gpu_util: 0.25
     max_concurrent: 32
     max_model_len: 4096
+    llm_extra_args: "--language-model-only"
 
   # ---------- AMD Dual GPU ----------
   amd_dual_24gb:
@@ -375,12 +381,13 @@ profiles:
     min_total_vram_mb: 38000
     max_total_vram_mb: 44000
     strategy: dual_flagship
-    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    llm_model: Qwen/Qwen3.6-27B-GPTQ-Int4
     asr_model: Qwen/Qwen3-ASR-1.7B
     llm_gpu_util: 0.85
     asr_gpu_util: 0.85
     max_concurrent: 64
     max_model_len: 4096
+    llm_extra_args: "--language-model-only"
 
   amd_dual_48gb_plus:
     name: "AMD Dual 48GB+ (7900 XTX + 7900 XTX)"
@@ -389,12 +396,13 @@ profiles:
     gpu_count: 2
     min_total_vram_mb: 44000
     strategy: dual_ultra
-    llm_model: Qwen/Qwen3.5-27B-GPTQ-Int4
+    llm_model: Qwen/Qwen3.6-27B-GPTQ-Int4
     asr_model: Qwen/Qwen3-ASR-1.7B
     llm_gpu_util: 0.85
     asr_gpu_util: 0.85
     max_concurrent: 64
     max_model_len: 8192
+    llm_extra_args: "--language-model-only"
 
   # ---------- Intel Arc ----------
   intel_single_6gb:

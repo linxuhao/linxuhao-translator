@@ -155,7 +155,7 @@ uvicorn gateway:app --host 0.0.0.0 --port 5000
 ### Key Services (docker-compose.yml)
 
 - **gateway**: FastAPI routing + FFmpeg audio normalization
-- **vllm-qwen**: LLM translation engine (Qwen3.5-27B GPTQ-int4 on GPU 0)
+- **vllm-qwen**: LLM translation engine (Qwen3.6-27B GPTQ-int4 on GPU 0)
 - **qwen3-asr**: ASR engine (Qwen3-ASR-1.7B on GPU 1)
 - **cloudflared**: Cloudflare tunnel for public access
 
@@ -206,6 +206,21 @@ Set in `.env`:
 ### LLM Response Parsing
 
 Responses use XML-like tags: `<language>`, `<original>`, `<translation>`. Parsing in `record.py` handles truncated/incomplete tags.
+
+### Qwen3.6 Thinking Modes
+
+Qwen3.6-27B supports three operation modes controlled via API:
+
+| Mode | `enable_thinking` | Behavior |
+|------|-------------------|----------|
+| **Thinking** (default) | `true` | Model outputs `<think>...</think>` reasoning block before response |
+| **Instruct** | `true` + `preserve_thinking` | Keeps historical reasoning context |
+| **Non-thinking** | `false` | Direct response, no reasoning block |
+
+**Per-route configuration:**
+- `/api/stream_voice` (translation): Uses `enable_thinking: False` for low-latency direct translation
+- `/api/tutor/stream` (tutor): Uses `enable_thinking: True` to show AI reasoning process
+- `/api/record` (meeting): Uses `enable_thinking: True` for full analysis with reasoning
 
 ## GPU Configuration
 

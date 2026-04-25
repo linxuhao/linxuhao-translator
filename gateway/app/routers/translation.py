@@ -211,11 +211,14 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
             "model": "qwen3",
             "messages": messages,
             "stream": True,
-            "max_tokens": 128, 
-            "temperature": 0.2, 
+            "max_tokens": 128,
+            "temperature": 0.2,
             "top_p": 0.85,
             "presence_penalty": 1.2,
-            "repetition_penalty": 1.05
+            "repetition_penalty": 1.05,
+            "extra_body": {
+                "chat_template_kwargs": {"enable_thinking": True}
+            }
         }
 
         t_llm_start = time.time()
