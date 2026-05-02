@@ -50,10 +50,8 @@ services:
     command: >
       vllm serve groxaxo/Qwen3.6-27B-GPTQ-Pro-4bit
       --dtype float16
-      --disable-custom-all-reduce
       --max-model-len 8192
       --gpu-memory-utilization 0.99
-      --language-model-only
       --max-num-seqs 80
       --chat-template /app/thinking.jinja
       --served-model-name qwen3
@@ -61,9 +59,9 @@ services:
     restart: unless-stopped
 
  # ==========================================
-# 文件名: docker-compose.audio.yml
-# 架构定位: GPU 1 (7800 XT) - 纯正 ROCm 原生听觉与发声节点
-# ==========================================
+  # 文件名: docker-compose.audio.yml
+  # 架构定位: GPU 1 (7800 XT) - 纯正 ROCm 原生听觉与发声节点
+  # ==========================================
   qwen3-asr:
     build:
         context: ./qwen3-asr
@@ -85,11 +83,26 @@ services:
     entrypoint: []
     # 【关键修复 2】：手动指定 bash 执行环境
     command: >
-      vllm serve Qwen/Qwen3-ASR-1.7B     
+      vllm serve Qwen/Qwen3-ASR-1.7B
       --dtype float16
       --max-model-len 8192
       --gpu-memory-utilization 0.85
       --max-num-seqs 80
       --served-model-name qwen3-asr
       --trust-remote-code
+    restart: unless-stopped
+
+  # ==========================================
+  # MCP Server - ASR/OCR 工具 (Tailscale 私有网络)
+  # ==========================================
+  mcp-server:
+    build:
+      context: ./mcp-server
+    container_name: mcp_server
+    ports:
+      - "9003:9003"
+      - "9004:9004"
+    environment:
+      - ASR_URL=http://qwen3_asr:8000/v1/chat/completions
+      - VLLM_URL=http://vllm_qwen:8000/v1/chat/completions
     restart: unless-stopped

@@ -320,6 +320,22 @@ def add_cloudflared(config: dict) -> dict:
     return config
 
 
+def add_mcp_server(config: dict) -> dict:
+    """Add MCP server service for Tailscale network access to ASR/OCR."""
+    config['services']['mcp-server'] = {
+        'build': {'context': './mcp-server'},
+        'container_name': 'mcp_server',
+        'ports': ['9003:9003'],
+        'environment': [
+            'ASR_URL=http://qwen3_asr:8000/v1/chat/completions',
+            'VLLM_URL=http://vllm_qwen:8000/v1/chat/completions',
+            'HF_TOKEN=${HF_TOKEN}',
+        ],
+        'restart': 'unless-stopped',
+    }
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate docker-compose.yml from hardware.env')
     parser.add_argument('--env', required=True, help='Path to hardware.env')
@@ -345,6 +361,9 @@ def main():
 
     # Add cloudflared if configured
     config = add_cloudflared(config)
+
+    # Always add MCP server for Tailscale network access
+    config = add_mcp_server(config)
 
     # Write output with header comment
     output_path = Path(args.output)
