@@ -101,7 +101,6 @@ services:
     container_name: mcp_server
     ports:
       - "9003:9003"
-      - "9004:9004"
     environment:
       - ASR_URL=http://qwen3_asr:8000/v1/chat/completions
       - VLLM_URL=http://vllm_qwen:8000/v1/chat/completions

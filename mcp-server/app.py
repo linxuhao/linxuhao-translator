@@ -7,18 +7,16 @@
 # 2. URL: 直接传递公开 URL，mcp-server 下载并处理
 # 3. base64: 直接传递 base64 编码的内容
 #
-# REST 端点:
+# 统一端点 (端口 9003):
 #   POST /upload/audio  - 上传音频 -> file_id
 #   POST /upload/image - 上传图片 -> file_id
 #   POST /upload/pdf    - 上传 PDF -> file_id
+#   /mcp - MCP JSON-RPC 协议
 #
 # MCP 工具:
 #   transcribe_audio(audio_base64?, audio_file_id?, audio_url?)
 #   ocr_image(image_base64?, image_file_id?, image_url?)
 #   ocr_pdf(pdf_base64?, pdf_file_id?, pdf_url?)
-#
-# MCP 端点: http://localhost:9003/mcp
-# REST 端点: http://localhost:9004 (同一进程内)
 # ==========================================
 import asyncio
 import io
@@ -27,17 +25,12 @@ import uuid
 import base64
 
 import httpx
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from fastmcp import FastMCP
 from PIL import Image
 from cachetools import LRUCache
 import pdfplumber
-
-# ==========================================
-# vLLM Vision (GPU-accelerated, no pre-OCR)
-# Pure vLLM at full resolution provides best OCR accuracy
-# ==========================================
 
 # ==========================================
 # 配置
@@ -46,6 +39,8 @@ VLLM_URL = os.getenv("VLLM_URL", "http://vllm_qwen:8000/v1/chat/completions")
 ASR_URL = os.getenv("ASR_URL", "http://qwen3_asr:8000/v1/chat/completions")
 ASR_MODEL = os.getenv("ASR_MODEL_NAME", "qwen3-asr")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
+
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://linxuhaserver:8888/search")
 
 TIMEOUT = 60.0
 
@@ -56,19 +51,34 @@ RESIZE_ENABLED = True  # True = resize if larger than MAX_IMAGE_PIXELS
 PDF_PAGE_DPI = 300  # Render PDF pages at 300 DPI (1100x3000px - tested to work with vLLM)
 
 # File storage: LRU cache, max 50 entries, auto-evicts least-recently-used
-# Accessing a file_id moves it to most-recently-used position
 file_storage = LRUCache(maxsize=50)
 
-# ==========================================
-# FastAPI 应用 (用于 REST 上传端点)
-# ==========================================
-upload_app = FastAPI(title="vip-gateway-mcp-upload")
 
-upload_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+# ==========================================
+# MCP Server
+# ==========================================
+mcp = FastMCP(
+    "asr-ocr-pdf-search-mcp",
+    instructions=(
+        "本服务器提供 ASR 语音转录、OCR 图片识别、PDF 文字提取、网页搜索功能。\n\n"
+        "支持的格式:\n"
+        "  Audio: webm, mp4, mp3, wav, ogg, flac, aac, m4a, opus 等 (FFmpeg 支持的全部)\n"
+        "  Image: png, jpg/jpeg, gif, bmp, tiff, webp 等 (PIL 支持的全部)\n"
+        "  PDF:   pdf\n\n"
+        "【重要】上传文件不是 MCP tool，而是 REST HTTP 端点。\n"
+        "上传前需要先从你的 MCP config 中找到本服务器的 URL（通常是 http://xxx:9003），\n"
+        "然后用 curl 或 HTTP 请求上传:\n"
+        "  curl -X POST <MCP_URL>/upload/audio -F 'file=@audio.webm'\n"
+        "  curl -X POST <MCP_URL>/upload/image -F 'file=@image.png'\n"
+        "  curl -X POST <MCP_URL>/upload/pdf   -F 'file=@doc.pdf'\n"
+        "上传成功后返回 {\"file_id\": \"xxx\"}，再用该 file_id 调用 MCP tool。\n\n"
+        "MCP 工具调用:\n"
+        "  transcribe_audio(audio_file_id='...')\n"
+        "  ocr_image(image_file_id='...')\n"
+        "  ocr_pdf(pdf_file_id='...')\n"
+        "  web_search(query='...')\n\n"
+        "也支持直接传 URL 或 base64，但优先使用 file_id。"
+    ),
 )
 
 
@@ -98,8 +108,6 @@ def get_audio_content(audio_data: bytes) -> list:
 def get_image_content(img: Image.Image) -> list:
     img = resize_image(img)
     img_b64 = image_to_jpeg_base64(img)
-    # Pure vLLM handles OCR + image description
-    # No pre-OCR needed - vLLM vision at full resolution provides best accuracy
     return [
         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
         {"type": "text", "text": "Format and correct the following text. Fix any OCR errors using context from the image. Briefly describe any icons, logos, screenshots, or graphs visible."}
@@ -107,7 +115,6 @@ def get_image_content(img: Image.Image) -> list:
 
 
 async def convert_to_wav(audio_bytes: bytes) -> bytes:
-    """Convert audio to 16kHz mono WAV using FFmpeg"""
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-y", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1",
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
@@ -119,46 +126,54 @@ async def convert_to_wav(audio_bytes: bytes) -> bytes:
 
 
 # ==========================================
-# REST 上传端点
+# REST 上传端点 (custom_route)
 # ==========================================
 
-@upload_app.post("/upload/audio")
-async def upload_audio(file: UploadFile = File(...)) -> dict:
+@mcp.custom_route("/upload/audio", methods=["POST"])
+async def upload_audio(request: Request) -> JSONResponse:
     """上传音频文件，自动转换为 WAV，返回 file_id"""
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        return JSONResponse({"error": "no file"}, status_code=400)
     content = await file.read()
-    # Convert to WAV
     wav_data = await convert_to_wav(content)
     file_id = str(uuid.uuid4())
     file_storage[file_id] = wav_data
-    return {"file_id": file_id, "size": len(wav_data)}
+    return JSONResponse({"file_id": file_id, "size": len(wav_data)})
 
 
-@upload_app.post("/upload/image")
-async def upload_image(file: UploadFile = File(...)) -> dict:
+@mcp.custom_route("/upload/image", methods=["POST"])
+async def upload_image(request: Request) -> JSONResponse:
     """上传图片文件，返回 file_id"""
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        return JSONResponse({"error": "no file"}, status_code=400)
     content = await file.read()
     file_id = str(uuid.uuid4())
     file_storage[file_id] = content
-    return {"file_id": file_id, "size": len(content)}
+    return JSONResponse({"file_id": file_id, "size": len(content)})
 
 
-@upload_app.post("/upload/pdf")
-async def upload_pdf(file: UploadFile = File(...)) -> dict:
+@mcp.custom_route("/upload/pdf", methods=["POST"])
+async def upload_pdf(request: Request) -> JSONResponse:
     """上传 PDF 文件，返回 file_id"""
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        return JSONResponse({"error": "no file"}, status_code=400)
     content = await file.read()
     file_id = str(uuid.uuid4())
     file_storage[file_id] = content
-    return {"file_id": file_id, "size": len(content)}
+    return JSONResponse({"file_id": file_id, "size": len(content)})
 
 
 # ==========================================
-# MCP Server - ASR/OCR 工具 (Tailscale 私有网络)
+# MCP 工具
 # ==========================================
-mcp = FastMCP("vip-gateway-mcp")
-
 
 async def download_url(url: str) -> bytes:
-    """Download content from URL and return bytes"""
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
         resp = await client.get(url)
         resp.raise_for_status()
@@ -166,8 +181,8 @@ async def download_url(url: str) -> bytes:
 
 
 def is_file_url(url: str) -> bool:
-    """Check if URL is a local file URL"""
     return url.startswith("file://") or url.startswith("/") or url.startswith("data:")
+
 
 async def call_asr(content: list) -> str:
     payload = {
@@ -229,7 +244,6 @@ async def transcribe_audio(audio_base64: str = None, audio_file_id: str = None, 
     else:
         return "错误: 必须提供 audio_base64、audio_file_id 或 audio_url"
 
-    # All inputs must be converted to 16kHz mono WAV
     wav_data = await convert_to_wav(audio_data)
     content = get_audio_content(wav_data)
     return await call_asr(content)
@@ -263,16 +277,13 @@ async def ocr_image(image_base64: str = None, image_file_id: str = None, image_u
     else:
         return "错误: 必须提供 image_base64、image_file_id 或 image_url"
 
-    # Pure vLLM handles OCR + image description at full resolution
     img = resize_image(img)
     img_b64 = image_to_jpeg_base64(img)
     content = [
         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
         {"type": "text", "text": "Format and correct the following text. Fix any OCR errors using context from the image. Briefly describe any icons, logos, screenshots, or graphs visible."}
     ]
-    ocr_text = await call_vllm(content)
-
-    return ocr_text
+    return await call_vllm(content)
 
 
 @mcp.tool()
@@ -309,16 +320,11 @@ async def ocr_pdf(pdf_base64: str = None, pdf_file_id: str = None, pdf_url: str 
         results = []
 
         for page_num, page in enumerate(pdf.pages):
-            # Get native text from PDF
             native_text = page.extract_text() or ""
-
-            # Get full resolution image at high DPI for best quality
             img = page.to_image(PDF_PAGE_DPI).original
             img = resize_image(img)
             img_b64 = image_to_jpeg_base64(img)
 
-            # Pure vLLM handles OCR + image description at full resolution
-            # No pre-OCR needed - vLLM vision provides best accuracy
             content = [
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
                 {"type": "text", "text": f"Format and correct the following text from page {page_num + 1}/{page_count}. Fix any OCR errors using context from the image. Briefly describe any icons, logos, screenshots, or graphs visible."}
@@ -334,46 +340,64 @@ async def ocr_pdf(pdf_base64: str = None, pdf_file_id: str = None, pdf_url: str 
         return "\n\n".join(results)
 
 
+@mcp.tool()
+async def web_search(query: str, categories: str = None, language: str = None, time_range: str = None, max_results: int = 10) -> str:
+    """使用 SearXNG 搜索网页。
+
+    参数:
+        query: 搜索关键词
+        categories: 搜索类别，如 general, news, images, videos, science 等 (可选)
+        language: 语言代码，如 zh, en, ja (可选)
+        time_range: 时间范围，可选 day, week, month, year (可选)
+        max_results: 返回结果数量上限 (默认 10)
+    """
+    params = {"q": query, "format": "json"}
+    if categories:
+        params["categories"] = categories
+    if language:
+        params["language"] = language
+    if time_range:
+        params["time_range"] = time_range
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(SEARXNG_URL, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = data.get("results", [])[:max_results]
+    if not results:
+        return "未找到结果"
+
+    lines = []
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "")
+        url = r.get("url", "")
+        snippet = r.get("content", "")
+        lines.append(f"{i}. [{title}]({url})\n   {snippet}")
+
+    return "\n\n".join(lines)
+
+
 # ==========================================
 # 启动服务器
 # ==========================================
 if __name__ == "__main__":
     import uvicorn
-    from threading import Thread
 
-    def run_upload_server():
-        """启动 REST 上传服务器 (端口 9004)"""
-        uvicorn.run(upload_app, host="0.0.0.0", port=9004, log_level="warning")
-
-    # 在独立线程中启动 REST API
-    upload_thread = Thread(target=run_upload_server, daemon=True)
-    upload_thread.start()
-
-    # 输出文档
     print("=" * 60)
     print("vip-gateway-mcp Server")
     print("=" * 60)
     print()
-    print("MCP Endpoint:  http://localhost:9003/mcp")
-    print("REST Upload:   http://localhost:9004")
+    print("Endpoint: http://localhost:9003")
+    print("  POST /upload/audio - 上传音频 -> file_id")
+    print("  POST /upload/image - 上传图片 -> file_id")
+    print("  POST /upload/pdf   - 上传 PDF -> file_id")
+    print("  /mcp              - MCP JSON-RPC")
     print()
-    print("REST Upload Endpoints:")
-    print("  POST /upload/audio - 上传音频文件 -> {file_id}")
-    print("  POST /upload/image - 上传图片文件 -> {file_id}")
-    print("  POST /upload/pdf   - 上传 PDF 文件 -> {file_id}")
-    print()
-    print("MCP Tools (support base64, file_id, or URL):")
+    print("MCP Tools:")
     print("  transcribe_audio(audio_base64?, audio_file_id?, audio_url?)")
     print("  ocr_image(image_base64?, image_file_id?, image_url?)")
     print("  ocr_pdf(pdf_base64?, pdf_file_id?, pdf_url?)")
-    print()
-    print("推荐工作流:")
-    print("  1. POST /upload/image -> {file_id}  (最高效)")
-    print("  2. MCP tool call with image_file_id")
-    print()
-    print("或使用 URL (mcp-server 会下载并处理):")
-    print("  MCP tool call with image_url/audio_url/pdf_url")
     print("=" * 60)
 
-    # 启动 MCP 服务器
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=9003)
+    uvicorn.run(mcp.http_app(), host="0.0.0.0", port=9003)
