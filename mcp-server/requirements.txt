@@ -7,3 +7,5 @@ fastapi
 uvicorn
 cachetools
 numpy
+beautifulsoup4
+lxml

@@ -1,6 +1,6 @@
 # ==========================================
 # 文件名: app.py
-# 架构定位: MCP Server - 暴露 ASR 和 OCR 工具给 Tailscale 网络上的 hermes-agent
+# 架构定位: MCP Server - 暴露 ASR、OCR、网页搜索和网页抓取工具给 hermes-agent
 #
 # 支持三种输入方式:
 # 1. REST 上传 (multipart/form-data): 上传文件获取 file_id (最高效)
@@ -17,6 +17,8 @@
 #   transcribe_audio(audio_base64?, audio_file_id?, audio_url?)
 #   ocr_image(image_base64?, image_file_id?, image_url?)
 #   ocr_pdf(pdf_base64?, pdf_file_id?, pdf_url?)
+#   web_search(query, categories?, language?, time_range?, max_results?)
+#   web_fetch(url, prompt?, max_length?, parse_media?)
 # ==========================================
 import asyncio
 import io
@@ -31,6 +33,7 @@ from fastmcp import FastMCP
 from PIL import Image
 from cachetools import LRUCache
 import pdfplumber
+from bs4 import BeautifulSoup
 
 # ==========================================
 # 配置
@@ -58,7 +61,7 @@ file_storage = LRUCache(maxsize=50)
 # MCP Server
 # ==========================================
 mcp = FastMCP(
-    "asr-ocr-pdf-search-mcp",
+    "asr-ocr-pdf-web-mcp",
     instructions=(
         "本服务器提供 ASR 语音转录、OCR 图片识别、PDF 文字提取、网页搜索功能。\n\n"
         "支持的格式:\n"
@@ -76,7 +79,8 @@ mcp = FastMCP(
         "  transcribe_audio(audio_file_id='...')\n"
         "  ocr_image(image_file_id='...')\n"
         "  ocr_pdf(pdf_file_id='...')\n"
-        "  web_search(query='...')\n\n"
+        "  web_search(query='...')\n"
+        "  web_fetch(url='...', prompt='...', max_length=8000, parse_media=False)\n\n"
         "也支持直接传 URL 或 base64，但优先使用 file_id。"
     ),
 )
@@ -378,6 +382,240 @@ async def web_search(query: str, categories: str = None, language: str = None, t
     return "\n\n".join(lines)
 
 
+@mcp.tool()
+async def web_fetch(url: str, prompt: str = None, max_length: int = 8000, parse_media: bool = False) -> str:
+    """抓取网页内容并提取纯文本。自动提取页面中的图片、音频、视频、PDF 等非文本资源 URL。
+    可选通过 prompt 参数调用 Qwen3.6-27B 进行内容分析，或通过 parse_media 参数自动 OCR 图片+转录音频。
+
+    参数:
+        url: 要抓取的网页 URL
+        prompt: 可选的分析提示。提供后会将提取的内容+媒体解析结果发给 Qwen3.6-27B 分析并返回分析结果。
+               不提供则返回原始文本+媒体 URL 列表。
+        max_length: 返回的最大文本长度 (默认 8000 字符，达到上限会截断并标记 [truncated])
+        parse_media: 是否自动下载并解析页面中的非文本资源 (默认 False)。
+                     True 时会并发处理最多 5 张图片 (Qwen3.6-27B vision OCR/描述) 和 3 个音频 (Qwen3-ASR 转录)。
+                     图片/音频下载失败会自动跳过不报错。
+                     False 时只在末尾列出媒体 URL，由调用方自行决定是否解析。
+
+    四种输出模式:
+
+    1. web_fetch(url) → 纯文本 + 媒体 URL 列表
+       输出格式: Title + Description + 正文 + ## Media Found (Images/Audio/Videos/Documents)
+       适用: 快速读取网页文字，知道有哪些图片/音频链接可用
+
+    2. web_fetch(url, prompt="...") → LLM 分析结果
+       将模式1的全部内容（含文本+媒体URL列表）交给 Qwen3.6-27B，按 prompt 要求分析
+       适用: 快速总结文章、提取关键信息、翻译等
+
+    3. web_fetch(url, parse_media=True) → 纯文本 + 媒体 URL 列表 + ## Parsed Media (每张图/音频的解析)
+       适用: 完整理解页面所有内容（文字+图表+截图+音频）
+
+    4. web_fetch(url, prompt="...", parse_media=True) → 全部内容 + 媒体解析 → LLM 分析
+       适用: 最完整的页面理解，图文并茂地分析
+
+    注意:
+    - 非 HTML 内容 (JSON/XML/纯文本) 直接返回原始内容，不提取媒体
+    - 媒体 URL 自动转为绝对路径
+    - 每种类型最多列出 20 个 URL
+    """
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; vip-gateway-mcp/1.0)"})
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+        final_url = str(resp.url)  # After redirects
+
+    if "text/html" in content_type:
+        soup = BeautifulSoup(resp.text, "lxml")
+        base_url = final_url
+
+        # --- Text extraction ---
+        title = ""
+        if soup.title and soup.title.string:
+            title = soup.title.string.strip()
+
+        meta_desc = ""
+        meta_tag = soup.find("meta", attrs={"name": "description"})
+        if meta_tag and meta_tag.get("content"):
+            meta_desc = meta_tag["content"].strip()
+
+        # Remove non-content elements (before extracting media, so we don't get nav/footer images)
+        for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "iframe", "svg"]):
+            tag.decompose()
+
+        body = soup.body
+        text = body.get_text(separator="\n") if body else soup.get_text(separator="\n")
+
+        lines = (line.strip() for line in text.splitlines())
+        text = "\n".join(line for line in lines if line)
+
+        if len(text) > max_length:
+            text = text[:max_length] + "\n... [truncated]"
+
+        result = f"Title: {title or 'N/A'}\n"
+        if meta_desc:
+            result += f"Description: {meta_desc}\n"
+        result += f"\n{text}"
+
+        # --- Extract media URLs ---
+        media_sections = _extract_media_urls(soup, base_url)
+
+        if any(media_sections.values()):
+            result += "\n\n## Media Found\n"
+            for media_type, urls in media_sections.items():
+                if urls:
+                    result += f"\n### {media_type} ({len(urls)}):\n"
+                    for u in urls[:20]:  # Cap at 20 per type
+                        result += f"  - {u}\n"
+                    if len(urls) > 20:
+                        result += f"  ... and {len(urls) - 20} more\n"
+
+        # --- Parse media ---
+        if parse_media:
+            media_results = await _parse_media_items(
+                media_sections.get("Images", []),
+                media_sections.get("Audio", []),
+            )
+            if media_results:
+                result += "\n\n## Parsed Media\n"
+                for r in media_results:
+                    result += f"\n{r}"
+
+    elif "text/" in content_type or "application/json" in content_type or "application/xml" in content_type:
+        text = resp.text
+        if len(text) > max_length:
+            text = text[:max_length] + "\n... [truncated]"
+        result = text
+    else:
+        return f"不支持的内容类型: {content_type}"
+
+    # --- LLM analysis ---
+    if prompt:
+        content = [
+            {"type": "text", "text": f"以下是从 {final_url} 抓取的内容:\n\n{result}\n\n---\n用户问题: {prompt}"}
+        ]
+        result = await call_vllm(content, max_tokens=2048)
+
+    return result
+
+
+def _abs_url(base_url: str, href: str) -> str:
+    """Resolve relative URL against base."""
+    from urllib.parse import urljoin
+    return urljoin(base_url, href)
+
+
+def _extract_media_urls(soup: BeautifulSoup, base_url: str) -> dict:
+    """Extract image, audio, video, and document URLs from parsed HTML."""
+    result: dict[str, list[str]] = {}
+
+    # Images
+    img_urls = []
+    for img in soup.find_all("img"):
+        src = img.get("src")
+        if src:
+            abs_url = _abs_url(base_url, src)
+            if abs_url not in img_urls:
+                img_urls.append(abs_url)
+    if img_urls:
+        result["Images"] = img_urls
+
+    # Audio
+    audio_urls = []
+    for audio in soup.find_all("audio"):
+        for src_tag in audio.find_all("source"):
+            src = src_tag.get("src")
+            if src:
+                abs_url = _abs_url(base_url, src)
+                if abs_url not in audio_urls:
+                    audio_urls.append(abs_url)
+        src = audio.get("src")
+        if src:
+            abs_url = _abs_url(base_url, src)
+            if abs_url not in audio_urls:
+                audio_urls.append(abs_url)
+    if audio_urls:
+        result["Audio"] = audio_urls
+
+    # Video
+    video_urls = []
+    for video in soup.find_all("video"):
+        for src_tag in video.find_all("source"):
+            src = src_tag.get("src")
+            if src:
+                abs_url = _abs_url(base_url, src)
+                if abs_url not in video_urls:
+                    video_urls.append(abs_url)
+        src = video.get("src")
+        if src:
+            abs_url = _abs_url(base_url, src)
+            if abs_url not in video_urls:
+                video_urls.append(abs_url)
+    if video_urls:
+        result["Videos"] = video_urls
+
+    # Documents (PDF, DOC, etc.)
+    doc_exts = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".epub", ".csv")
+    doc_urls = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if any(href.lower().endswith(ext) or f".{ext}?" in href.lower() for ext in doc_exts):
+            abs_url = _abs_url(base_url, href)
+            if abs_url not in doc_urls:
+                doc_urls.append(abs_url)
+    if doc_urls:
+        result["Documents"] = doc_urls
+
+    return result
+
+
+async def _parse_media_items(image_urls: list[str], audio_urls: list[str]) -> list[str]:
+    """Download and OCR/transcribe media. Limits: 5 images, 3 audio."""
+    import asyncio
+
+    results = []
+
+    # Parse images via vLLM vision
+    async def ocr_one(img_url: str, idx: int) -> str | None:
+        try:
+            img_data = await download_url(img_url)
+            img = Image.open(io.BytesIO(img_data))
+            img = resize_image(img)
+            img_b64 = image_to_jpeg_base64(img)
+            content = [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                {"type": "text", "text": "Describe this image in one sentence, including any text visible in it."}
+            ]
+            desc = await call_vllm(content, max_tokens=256)
+            return f"  [Image {idx}]({img_url}): {desc.strip()}"
+        except Exception:
+            return None
+
+    # Transcribe audio via ASR
+    async def asr_one(audio_url: str, idx: int) -> str | None:
+        try:
+            audio_data = await download_url(audio_url)
+            wav_data = await convert_to_wav(audio_data)
+            content = get_audio_content(wav_data)
+            transcript = await call_asr(content)
+            return f"  [Audio {idx}]({audio_url}): {transcript.strip()}"
+        except Exception:
+            return None
+
+    # Run images (up to 5) and audio (up to 3) concurrently
+    tasks = []
+    for i, u in enumerate(image_urls[:5], 1):
+        tasks.append(ocr_one(u, i))
+    for i, u in enumerate(audio_urls[:3], 1):
+        tasks.append(asr_one(u, i))
+
+    gathered = await asyncio.gather(*tasks)
+    for r in gathered:
+        if r:
+            results.append(r)
+
+    return results
+
+
 # ==========================================
 # 启动服务器
 # ==========================================
@@ -398,6 +636,8 @@ if __name__ == "__main__":
     print("  transcribe_audio(audio_base64?, audio_file_id?, audio_url?)")
     print("  ocr_image(image_base64?, image_file_id?, image_url?)")
     print("  ocr_pdf(pdf_base64?, pdf_file_id?, pdf_url?)")
+    print("  web_search(query=..., categories=?, language=?, time_range=?, max_results=?)")
+    print("  web_fetch(url=..., max_length=?)")
     print("=" * 60)
 
     uvicorn.run(mcp.http_app(), host="0.0.0.0", port=9003)
