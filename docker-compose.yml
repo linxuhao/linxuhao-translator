@@ -51,7 +51,7 @@ services:
     command: >
       vllm serve groxaxo/Qwen3.6-27B-GPTQ-Pro-4bit
       --dtype float16
-      --max-model-len 8192
+      --max-model-len 16384
       --gpu-memory-utilization 0.99
       --max-num-seqs 60
       --chat-template /app/thinking.jinja

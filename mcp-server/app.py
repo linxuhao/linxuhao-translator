@@ -48,8 +48,8 @@ SEARXNG_URL = os.getenv("SEARXNG_URL", "http://linxuhaserver:8888/search")
 TIMEOUT = 60.0
 
 # Image resize settings
-MAX_IMAGE_PIXELS = 3000  # ~300 DPI equivalent (300 DPI × 10"), matches PDF page rendering
-JPEG_QUALITY = 98
+MAX_IMAGE_PIXELS = 2400  # ~300 DPI equivalent (300 DPI × 10"), matches PDF page rendering
+JPEG_QUALITY = 95
 RESIZE_ENABLED = True  # True = resize if larger than MAX_IMAGE_PIXELS
 PDF_PAGE_DPI = 300  # Render PDF pages at 300 DPI (1100x3000px - tested to work with vLLM)
 
