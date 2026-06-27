@@ -1,84 +1,126 @@
-# 🗣️ 随身翻译官/ShuiShen-Translator
+# 🗣️ 随身翻译官 / ShuiShen-Translator
 
-A high-performance, self-hosted AI translation gateway optimized for heterogeneous AMD ROCm multi-GPU environments. It combines the raw hearing capability of **Qwen3-ASR** with the linguistic reasoning of **Qwen3.5-27B**, wrapped in a mobile-first, iOS-compatible web interface.
+A high-performance, self-hosted real-time **voice AI gateway**, optimized for heterogeneous AMD ROCm (and NVIDIA / Apple / Intel) multi-GPU environments. It pairs the raw hearing of **Qwen3-ASR** with the linguistic reasoning of **Qwen3.6-27B**, all wrapped in a mobile-first, iOS-compatible web interface.
+
+One self-hosted speech pipeline (push-to-talk → ASR → LLM → streamed reply), three product modes: a low-latency **Translator**, a voice-based **AI Tutor**, and a **Meeting Recorder**.
 
 ## ✨ Key Features
 
 ### Product Experience
 
-* **Push-to-Talk Translation**: Seamlessly record audio via mobile or desktop browsers.
-* **Auto Language Identification (LID)**: Automatically detects the spoken foreign language and translates it to your native language (and vice versa).
-* **Smart TTS History Queue**: Translations are pushed to a local queue. Includes a check-to-play system designed specifically to bypass iOS Safari's strict audio autoplay restrictions.
-* **LocalStorage Persistence**: Your native language preference and translation history survive page refreshes.
-* **Export & Clear**: Export your entire translation history to a `.txt` file or clear it with one click.
+* **Push-to-Talk, Mobile-First**: Record audio from any mobile or desktop browser. The UI is a single-page PWA-style app with a bottom tab bar switching between Translate / Tutor / Record.
+* **Auto Language Identification (LID)**: Automatically detects the spoken language. The translator runs **3 parallel ASR passes** (native-anchored, target-anchored, and free-detect) and lets the LLM cross-reference them, including an acoustic "back-inference" step that recovers heavily-accented foreign speech mis-heard as homophones.
+* **Token-Level Streaming**: Translations and tutor replies stream token-by-token over Server-Sent Events for minimal time-to-first-token.
+* **Smart TTS History Queue**: Replies are pushed to a local play queue with a check-to-play system designed to bypass iOS Safari's strict audio autoplay restrictions.
+* **LocalStorage Persistence**: Language preferences and per-mode history survive page refreshes. History can be exported to a `.txt` file or cleared with one click.
+
+### Modes
+
+Built on one real-time speech pipeline (self-hosted Qwen3-ASR + Qwen3.6-27B on vLLM/ROCm, FastAPI, Docker):
+
+#### 1. Translator (default) — `routers/translation.py`
+Push-to-talk → ASR → translation → playback, with auto language ID, conversational history, and replay. Owner-centric routing: anything not spoken in your native language is translated *to* your native language; native speech is translated *to* your chosen target language. A "third language" detection bubble lets you promote an unexpected language to the new target.
+
+#### 2. AI Tutor — "Marine" — `routers/tutor.py`
+A real-time, voice-based language tutor that adapts to the learner:
+* **Struggle-adaptive** — if the learner repeatedly stalls or mispronounces, it never forces repetition; it pivots to the native language to lower anxiety, then reintroduces the target language naturally.
+* **Accent-aware, face-saving correction** — an acoustic back-inference step detects when an ASR error is actually a heavily-accented attempt at the target language, and gives a gentle, natural correction without ever exposing that it was a recognition error.
+* **Conversational** — 2–4 short spoken-style sentences, streamed token-by-token, with ~20 messages of context.
+
+##### Bilingual Teaching vs Immersion (`allow_native` flag)
+* **Bilingual** — uses both native (`<母语>`) and target (`<外语>`) languages, never code-mixing within a sentence (scaffolding for beginners).
+* **Immersion** — target language only, for advanced practice.
+
+#### 3. Meeting Recorder — `routers/record.py`
+Continuous-listening meeting notes: 3-way noise-robust parallel ASR followed by LLM post-processing that fuses the variants, fixes cross-language mis-hearing, smooths filler words into written form, and emits a structured `language / original / translation` record. Recent turns are passed as context so proper nouns stay consistent.
 
 ### Engineering & Architecture
 
-* **Heterogeneous Dual-GPU Engine**: 
-  * **Ear Node (ASR)**: High-throughput `vLLM` engine running a 1.7B ASR model on a secondary GPU .
-  * **Brain Node (LLM)**: High-throughput `vLLM` engine running a 30B LLM on a flagship GPU.
-* **Audio Pipeline**: FFmpeg Audio normalization to the FastAPI gateway, feeding pure `16kHz WAV` directly into the GPU memory.
-* **Cloudflare Access Ready**: Built-in SQLite telemetry probe that hooks into `Cf-Access-Authenticated-User-Email` headers for usage tracking behind Cloudflare Zero Trust.
+* **Heterogeneous Dual-GPU Engine**:
+  * **Ear Node (ASR)**: a `vLLM` engine running the `Qwen3-ASR-1.7B` model on a secondary GPU.
+  * **Brain Node (LLM)**: a `vLLM` engine running `Qwen3.6-27B` (4-bit GPTQ) on the flagship GPU, served under the model name `qwen3`.
+* **Stateless Gateway**: a lightweight FastAPI node (no GPU) handles routing, FFmpeg audio normalization, request queueing, and SSE streaming. Each mode runs its own pool of concurrent workers fed by a priority queue.
+* **Audio Pipeline**: in-memory FFmpeg normalization to pure `16kHz mono WAV` before the audio is handed to the GPU nodes.
+* **Cloudflare Tunnel + Access Ready**: a `cloudflared` tunnel exposes the gateway globally, and a built-in SQLite telemetry probe hooks into the `Cf-Access-Authenticated-User-Email` header for per-user usage tracking behind Cloudflare Zero Trust.
+* **Admin & VIP Priority**: an `/admin` panel (admin-only, gated on the Cloudflare Access email) lists users and lets the owner grant **VIP** status; VIP/admin requests are served at a higher queue priority.
+* **Optional MCP Server**: a separate `mcp-server` exposes ASR / OCR (image + PDF) / web-search / web-fetch tools over the MCP JSON-RPC protocol for agent integrations.
 
 ## 🏗️ Architecture Matrix
 
 ```mermaid
 graph TD
-    A[Mobile Web UI] -->|WebM / MP4| B(FastAPI Gateway)
-    B -->|FFmpeg Wash -> WAV| C[Qwen3-ASR Node]
+    A[Mobile Web UI<br/>Translate / Tutor / Record] -->|WebM / MP4| B(FastAPI Gateway)
+    B -->|FFmpeg Wash -> 16kHz WAV| C[Qwen3-ASR Node]
     C -->|Detected Lang & Text| B
-    B -->|Prompt Injection| D[vLLM Qwen3-30B Node]
-    D -->|Translated JSON| B
-    B -->|Original + Translated Text| A
+    B -->|Prompt + History| D[vLLM Qwen3.6-27B Node]
+    D -->|Streamed Tokens| B
+    B -->|SSE: original + reply| A
     A -->|State Machine| E[Browser TTS / Queue]
+    F[Cloudflare Tunnel + Access] --- B
 ```
 
 ## 🚀 Deployment
 
 ### Prerequisites
 
-Docker & Docker Compose
+* Docker & Docker Compose
+* A supported GPU: AMD ROCm, NVIDIA, Apple Silicon, or Intel Arc
+* (Optional) A Cloudflare Tunnel token for public access
+* (Optional) A Hugging Face token for gated models
 
-AMD ROCm compatible GPUs (or NVIDIA equivalents by changing the base images in docker-compose.yml)
+### Option A — Hardware-Adaptive Installer (recommended)
 
-Hugging Face Token (for gated models) - Not necessary
-
-Cloudflare token for public DNS access
-
-## Quick Start
-
-### Clone the repository
+`install.sh` auto-detects your GPU vendor and VRAM, picks the best profile from `config/hardware_profiles.yml` (NVIDIA / AMD / Apple / Intel, single- or dual-GPU), generates a matching `docker-compose.yml`, and deploys.
 
 ```bash
 git clone https://github.com/linxuhao/linxuhao-translator.git
+cd linxuhao-translator
+
+./install.sh                  # auto-detect, generate config, deploy
+./install.sh --list-profiles  # show all available hardware profiles
+./install.sh --profile amd_single_24gb   # force a specific profile
+./install.sh --dry-run        # detection only, no changes
 ```
 
-cd linxuhao-translator
-Configure Environment:
-Ensure your .env file contains your cloudflare token.
-
-### Spin up the Matrix
+One-line bootstrap (clone + install):
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/linxuhao/linxuhao-translator/main/bootstrap.sh | bash
+```
+
+### Option B — Manual Docker Compose
+
+The repo ships a working `docker-compose.yml` tuned for a dual-AMD setup (7900 XTX + 7800 XT). Adjust the image/devices/model in it for your hardware, then:
+
+```bash
+# Optionally configure your tokens in .env (CF_TUNNEL_TOKEN, HF_TOKEN)
 docker compose up -d
 ```
 
-Note: The first boot will take some time as it downloads the Qwen3-ASR (1.7B) and Qwen3 (30B) models.
+> The first boot takes a while as it downloads the `Qwen3-ASR-1.7B` and `Qwen3.6-27B` models into `~/.cache/huggingface`.
 
-Access the UI:
-Navigate to <http://localhost:5000> (or your reverse proxy domain). Note: iOS requires HTTPS or localhost to grant microphone permissions.
+### Access the UI
 
-### 🛣️ Roadmap
+Navigate to <http://localhost:5000> (or your Cloudflare Tunnel domain).
 
-[x] Phase 1: Core translation loop & LLM routing.
+| Route | Mode |
+|-------|------|
+| `/`        | Translator |
+| `/tutor`   | AI Tutor ("Marine") |
+| `/record`  | Meeting Recorder |
+| `/admin`   | Admin panel (admin email only) |
 
-[x] Phase 2: Hardware acceleration (SDPA for ASR, vLLM for LLM) & iOS audio compatibility.
+> iOS requires HTTPS or `localhost` to grant microphone permissions.
 
-[x] Phase 3: Persistent TTS history queue and UI metrics.
+## 🛣️ Roadmap
 
-[ ] Phase 4 (Next): WebRTC Voice Activity Detection (VAD) chunking + Server-Sent Events (SSE) for true real-time streaming translation.
+- [x] Phase 1: Core translation loop & LLM routing.
+- [x] Phase 2: Hardware acceleration (vLLM for ASR + LLM) & iOS audio compatibility.
+- [x] Phase 3: Persistent TTS history queue and UI metrics.
+- [x] Phase 4: Multi-mode expansion — AI Tutor ("Marine") + Meeting Recorder on the shared pipeline.
+- [x] Phase 5: Hardware-adaptive installer (NVIDIA / AMD / Apple / Intel auto-profiling).
+- [ ] Phase 6 (Next): WebRTC Voice Activity Detection (VAD) chunking + true real-time streaming translation.
 
-[ ] Phase 5 (Later): Generalize the project
+## 📜 License
 
-📜 License
-MIT License.
+MIT License — © 2026 Lin Xuhao.
