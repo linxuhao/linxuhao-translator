@@ -68,36 +68,21 @@ graph TD
 * (Optional) A Cloudflare Tunnel token for public access
 * (Optional) A Hugging Face token for gated models
 
-### Option A — Hardware-Adaptive Installer (recommended)
+### Quick Start — Docker Compose
 
-`install.sh` auto-detects your GPU vendor and VRAM, picks a profile from `config/hardware_profiles.yml` (single- or dual-GPU), generates a matching `docker-compose.yml`, and deploys. Profiles exist for AMD, NVIDIA, Apple, and Intel, but only AMD is tested today — see [Hardware Support](#hardware-support) for the current status of each.
+The recommended install path. The repo ships a working `docker-compose.yml` tuned for a dual-AMD setup (7900 XTX + 7800 XT). Adjust the image/devices/model in it for your hardware, then:
 
 ```bash
 git clone https://github.com/linxuhao/linxuhao-translator.git
 cd linxuhao-translator
 
-./install.sh                  # auto-detect, generate config, deploy
-./install.sh --list-profiles  # show all available hardware profiles
-./install.sh --profile amd_single_24gb   # force a specific profile
-./install.sh --dry-run        # detection only, no changes
-```
-
-One-line bootstrap (clone + install):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/linxuhao/linxuhao-translator/main/bootstrap.sh | bash
-```
-
-### Option B — Manual Docker Compose
-
-The repo ships a working `docker-compose.yml` tuned for a dual-AMD setup (7900 XTX + 7800 XT). Adjust the image/devices/model in it for your hardware, then:
-
-```bash
 # Optionally configure your tokens in .env (CF_TUNNEL_TOKEN, HF_TOKEN)
 docker compose up -d
 ```
 
 > The first boot takes a while as it downloads the `Qwen3-ASR-1.7B` and `Qwen3.6-27B` models into `~/.cache/huggingface`.
+
+> On non-AMD hardware you'll need to adapt the image/devices to your GPU — see [Hardware Support](#hardware-support). An experimental auto-installer that generates this compose file for you is also documented there.
 
 ### Access the UI
 
@@ -123,7 +108,27 @@ The installer ships GPU profiles for four vendors, but they are at very differen
 | 🔴 **Apple (Metal/MPS)** | Not functional yet | Profile present, but the `vllm/vllm-openai` image has **no Metal/MPS backend**, so vLLM can't serve the models on Apple Silicon. |
 | 🔴 **Intel (XPU)** | Not functional yet | Profile present, but the `vllm/vllm-openai` image has **no XPU backend**, so vLLM can't serve the models on Intel GPUs. |
 
-If you're on AMD, follow the steps below as-is. On NVIDIA expect to do some debugging. Apple and Intel are wired into the installer for the future but won't serve models with the current vLLM image.
+If you're on AMD, follow the [Quick Start](#quick-start--docker-compose) as-is. On NVIDIA expect to do some debugging. Apple and Intel are wired into the installer for the future but won't serve models with the current vLLM image.
+
+### Experimental: Hardware-Adaptive Installer (AMD-tested)
+
+`install.sh` is a convenience wrapper that auto-detects your GPU vendor and VRAM, picks a profile from `config/hardware_profiles.yml` (single- or dual-GPU), generates a matching `docker-compose.yml`, and deploys. It is **experimental and only validated on AMD/ROCm** — NVIDIA is best-effort and Apple/Intel are non-functional, exactly as in the table above. It is **not** the recommended general path; prefer the [Quick Start](#quick-start--docker-compose) and adapt the compose file by hand.
+
+```bash
+git clone https://github.com/linxuhao/linxuhao-translator.git
+cd linxuhao-translator
+
+./install.sh                  # auto-detect, generate config, deploy
+./install.sh --list-profiles  # show all available hardware profiles
+./install.sh --profile amd_single_24gb   # force a specific profile
+./install.sh --dry-run        # detection only, no changes
+```
+
+One-line bootstrap (clone + install):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/linxuhao/linxuhao-translator/main/bootstrap.sh | bash
+```
 
 ## 🛣️ Roadmap
 
