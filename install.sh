@@ -2,7 +2,10 @@
 # VIP Gateway Hardware-Adaptive Installer
 # Auto-detects GPU hardware and selects optimal profile from hardware_profiles.yml
 # Auto-installs all dependencies (Docker, Python, venv, requirements)
-set -e
+# Note: -u is intentionally NOT enabled — several optional vars (REPLY, GPU
+# arrays on no-GPU paths) are legitimately unset; pipefail is safe and catches
+# failures in the many piped commands below (curl | tee, nvidia-smi | read, ...).
+set -eo pipefail
 
 VERSION="2.1.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -260,6 +263,8 @@ detect_gpu_vendor() {
 }
 
 detect_nvidia_gpus() {
+    # UNTESTED on NVIDIA hardware — verify nvidia-smi CSV parsing + the
+    # nvidia-container-runtime device reservation in generate_config.py before relying on this.
     local gpu_info
     gpu_info=$(nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits 2>/dev/null)
 
@@ -327,6 +332,9 @@ detect_amd_gpus() {
 }
 
 detect_apple_gpu() {
+    # UNTESTED on Apple Silicon — vLLM has no native Metal/MPS backend in the
+    # vllm/vllm-openai image, so the generated Apple compose is unlikely to serve
+    # as-is. Verify the image/backend before relying on this path.
     local mem_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
     TOTAL_VRAM_MB=$((mem_bytes / 1024 / 1024))
     GPU_COUNT=1
@@ -336,6 +344,9 @@ detect_apple_gpu() {
 }
 
 detect_intel_gpus() {
+    # UNTESTED on Intel Arc — VRAM is inferred from the lspci model string (hardcoded
+    # per-SKU MB values), not queried. The generic vllm/vllm-openai image also lacks an
+    # Intel XPU backend. Verify GPU detection + image/runtime before relying on this path.
     GPU_COUNT=0
     TOTAL_VRAM_MB=0
     declare -ga GPU_NAMES
@@ -464,6 +475,7 @@ LLM_MODEL=$LLM_MODEL
 LLM_GPU_INDEX=$llm_gpu
 LLM_GPU_UTIL=$LLM_GPU_UTIL
 LLM_MAX_MODEL_LEN=$MAX_MODEL_LEN
+LLM_EXTRA_ARGS="${LLM_EXTRA_ARGS:-}"
 
 ASR_MODEL=$ASR_MODEL
 ASR_GPU_INDEX=$asr_gpu

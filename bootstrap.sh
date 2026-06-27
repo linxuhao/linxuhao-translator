@@ -1,15 +1,15 @@
 #!/bin/bash
 # VIP Gateway Bootstrap Installer
-# One-line install: curl -fsSL https://raw.githubusercontent.com/xxx/vip-gateway/main/bootstrap.sh | bash
+# One-line install: curl -fsSL https://raw.githubusercontent.com/linxuhao/linxuhao-translator/main/bootstrap.sh | bash
 #
 # This script:
 #   1. Clones the vip-gateway repository
 #   2. Runs install.sh to setup everything
 #
-set -e
+set -euo pipefail
 
-REPO_URL="https://github.com/linxuhao/vip-gateway.git"
-INSTALL_DIR="vip-gateway"
+REPO_URL="https://github.com/linxuhao/linxuhao-translator.git"
+INSTALL_DIR="linxuhao-translator"
 
 # Color output
 RED='\033[0;31m'

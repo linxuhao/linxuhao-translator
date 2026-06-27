@@ -132,6 +132,10 @@ def output_env_vars(profile_id: str, profile: dict, vendor_config: dict):
     print(f"ASR_GPU_UTIL={profile.get('asr_gpu_util', 0.85)}")
     print(f"MAX_MODEL_LEN={profile.get('max_model_len', 4096)}")
     print(f"MAX_CONCURRENT={profile.get('max_concurrent', 16)}")
+    # Pass through optional per-profile extra vLLM args (e.g. --language-model-only).
+    # generate_config.py reads LLM_EXTRA_ARGS; without this line it was always empty,
+    # so profile-declared extra args were silently dropped.
+    print(f"LLM_EXTRA_ARGS=\"{profile.get('llm_extra_args', '')}\"")
 
     # Vendor configuration
     print(f"VLLM_IMAGE={vendor_config.get('image', 'vllm/vllm-openai:latest')}")
