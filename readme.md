@@ -1,6 +1,6 @@
 # 🗣️ 随身翻译官 / ShuiShen-Translator
 
-A high-performance, self-hosted real-time **voice AI gateway**, optimized for heterogeneous AMD ROCm (and NVIDIA / Apple / Intel) multi-GPU environments. It pairs the raw hearing of **Qwen3-ASR** with the linguistic reasoning of **Qwen3.6-27B**, all wrapped in a mobile-first, iOS-compatible web interface.
+A high-performance, self-hosted real-time **voice AI gateway**, built and tested on heterogeneous AMD ROCm multi-GPU hardware (with best-effort NVIDIA support; see [Hardware Support](#hardware-support)). It pairs the raw hearing of **Qwen3-ASR** with the linguistic reasoning of **Qwen3.6-27B**, all wrapped in a mobile-first, iOS-compatible web interface.
 
 One self-hosted speech pipeline (push-to-talk → ASR → LLM → streamed reply), three product modes: a low-latency **Translator**, a voice-based **AI Tutor**, and a **Meeting Recorder**.
 
@@ -64,13 +64,13 @@ graph TD
 ### Prerequisites
 
 * Docker & Docker Compose
-* A supported GPU: AMD ROCm, NVIDIA, Apple Silicon, or Intel Arc
+* A supported GPU — **AMD ROCm** (tested) or **NVIDIA** (best-effort, unverified). Apple/Intel are not functional yet; see [Hardware Support](#hardware-support).
 * (Optional) A Cloudflare Tunnel token for public access
 * (Optional) A Hugging Face token for gated models
 
 ### Option A — Hardware-Adaptive Installer (recommended)
 
-`install.sh` auto-detects your GPU vendor and VRAM, picks the best profile from `config/hardware_profiles.yml` (NVIDIA / AMD / Apple / Intel, single- or dual-GPU), generates a matching `docker-compose.yml`, and deploys.
+`install.sh` auto-detects your GPU vendor and VRAM, picks a profile from `config/hardware_profiles.yml` (single- or dual-GPU), generates a matching `docker-compose.yml`, and deploys. Profiles exist for AMD, NVIDIA, Apple, and Intel, but only AMD is tested today — see [Hardware Support](#hardware-support) for the current status of each.
 
 ```bash
 git clone https://github.com/linxuhao/linxuhao-translator.git
@@ -112,13 +112,26 @@ Navigate to <http://localhost:5000> (or your Cloudflare Tunnel domain).
 
 > iOS requires HTTPS or `localhost` to grant microphone permissions.
 
+## 🖥️ Hardware Support
+
+The installer ships GPU profiles for four vendors, but they are at very different maturity levels. Honest status:
+
+| Hardware | Status | Notes |
+|----------|--------|-------|
+| ✅ **AMD / ROCm** | Tested | The project is developed and runs in production on a dual-GPU AMD box. This is the supported path. |
+| 🟡 **NVIDIA** | Best-effort | A profile exists and is plausible, but has **not been verified on real NVIDIA hardware** yet. |
+| 🔴 **Apple (Metal/MPS)** | Not functional yet | Profile present, but the `vllm/vllm-openai` image has **no Metal/MPS backend**, so vLLM can't serve the models on Apple Silicon. |
+| 🔴 **Intel (XPU)** | Not functional yet | Profile present, but the `vllm/vllm-openai` image has **no XPU backend**, so vLLM can't serve the models on Intel GPUs. |
+
+If you're on AMD, follow the steps below as-is. On NVIDIA expect to do some debugging. Apple and Intel are wired into the installer for the future but won't serve models with the current vLLM image.
+
 ## 🛣️ Roadmap
 
 - [x] Phase 1: Core translation loop & LLM routing.
 - [x] Phase 2: Hardware acceleration (vLLM for ASR + LLM) & iOS audio compatibility.
 - [x] Phase 3: Persistent TTS history queue and UI metrics.
 - [x] Phase 4: Multi-mode expansion — AI Tutor ("Marine") + Meeting Recorder on the shared pipeline.
-- [x] Phase 5: Hardware-adaptive installer (NVIDIA / AMD / Apple / Intel auto-profiling).
+- [x] Phase 5: Hardware-adaptive installer (AMD tested; NVIDIA best-effort; Apple/Intel profiles present but not yet functional — see [Hardware Support](#hardware-support)).
 - [ ] Phase 6 (Next): WebRTC Voice Activity Detection (VAD) chunking + true real-time streaming translation.
 
 ## 📜 License
