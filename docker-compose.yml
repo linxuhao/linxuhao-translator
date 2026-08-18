@@ -49,11 +49,11 @@ services:
     entrypoint: []
     # 【关键修复 2】：手动指定 bash 执行环境
     command: >
-      vllm serve groxaxo/Qwen3.6-27B-GPTQ-Pro-4bit
+      vllm serve sokada4/Qwen3.8-27B-GPTQ-Int4
       --dtype float16
-      --max-model-len 16384
-      --gpu-memory-utilization 0.99
-      --max-num-seqs 60
+      --max-model-len 12288
+      --gpu-memory-utilization 0.95
+      --max-num-seqs 16
       --chat-template /app/thinking.jinja
       --served-model-name qwen3
       --trust-remote-code
