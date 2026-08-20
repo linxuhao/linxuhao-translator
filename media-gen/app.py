@@ -20,7 +20,7 @@ import logging
 import numpy as np
 import torch
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 from PIL import Image
 
@@ -258,6 +258,16 @@ async def get_job(job_id: str, timeout: float = 1800.0):
         if time.time() > deadline:
             return JSONResponse({"status": "timeout"}, status_code=504)
         await asyncio.sleep(1.0)
+
+
+@app.get("/files/{filename}")
+async def serve_file(filename: str):
+    """下载生成的文件 (图片/音乐), 供远程 agent 直接获取。"""
+    safe = os.path.basename(filename)  # 防目录穿越
+    path = os.path.join(GENERATED_DIR, safe)
+    if not os.path.exists(path):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path)
 
 
 @app.get("/health")

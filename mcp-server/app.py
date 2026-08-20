@@ -23,13 +23,12 @@
 import asyncio
 import io
 import os
-import time
 import uuid
 import base64
 
 import httpx
 from starlette.requests import Request
-from starlette.responses import JSONResponse, FileResponse
+from starlette.responses import JSONResponse
 from fastmcp import FastMCP
 from PIL import Image
 from cachetools import LRUCache
@@ -47,9 +46,9 @@ HF_TOKEN = os.getenv("HF_TOKEN", "")
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://linxuhaserver:8888/search")
 
 MEDIA_GEN_URL = os.getenv("MEDIA_GEN_URL", "http://media_gen:9010")
+# 供 agent 下载文件的公开 URL (远程部署时指向模型机的 Tailscale IP)
+MEDIA_GEN_PUBLIC_URL = os.getenv("MEDIA_GEN_PUBLIC_URL", MEDIA_GEN_URL)
 MEDIA_GEN_TIMEOUT = 600.0
-GENERATED_DIR = os.getenv("GENERATED_DIR", "/generated")
-GENERATED_HOST_DIR = os.getenv("GENERATED_HOST_DIR", "/home/linxuhao/vip-gateway/generated")
 
 TIMEOUT = 60.0
 
@@ -80,7 +79,7 @@ mcp = FastMCP(
         "  curl -X POST <MCP_URL>/upload/pdf   -F 'file=@doc.pdf'     -> {\"file_id\": \"xxx\"}\n\n"
         "【媒体生成】generate_image / generate_music:\n"
         "  - 内部是异步任务, 提交后阻塞等待完成 (最长 ~30 分钟), 返回生成文件的下载 URL。\n"
-        "  - 生成的文件通过 <MCP_URL>/files/{name} 下载 (name 取自返回的 file_url)。\n"
+        "  - 生成的文件由 media-gen 服务提供下载 (URL 已含在返回结果里, 远程部署时 MEDIA_GEN_PUBLIC_URL 指向模型机的 Tailscale IP)。\n"
         "  - generate_image 支持图生图: 传 reference_image_file_id (先上传参考图) 或 reference_image_base64。\n"
         "  - generate_music 支持 duration (音频秒数, 最长 47) 和 num_inference_steps。\n\n"
         "MCP 工具:\n"
@@ -180,16 +179,6 @@ async def upload_pdf(request: Request) -> JSONResponse:
     file_id = str(uuid.uuid4())
     file_storage[file_id] = content
     return JSONResponse({"file_id": file_id, "size": len(content)})
-
-
-@mcp.custom_route("/files/{filename}", methods=["GET"])
-async def serve_generated(request: Request) -> FileResponse:
-    """下载生成的文件 (图片/音乐), 供远程 agent 通过 URL 获取。"""
-    filename = os.path.basename(request.path_params["filename"])  # 防目录穿越
-    path = os.path.join(GENERATED_DIR, filename)
-    if not os.path.exists(path):
-        return JSONResponse({"error": "not found"}, status_code=404)
-    return FileResponse(path)
 
 
 # ==========================================
@@ -517,16 +506,6 @@ async def web_fetch(url: str, prompt: str = None, max_length: int = 8000, parse_
     return result
 
 
-def _save_generated(data: bytes, prefix: str, ext: str) -> str:
-    """将生成结果写入共享卷, 返回宿主机绝对路径。"""
-    os.makedirs(GENERATED_DIR, exist_ok=True)
-    name = f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
-    path = os.path.join(GENERATED_DIR, name)
-    with open(path, "wb") as f:
-        f.write(data)
-    return os.path.join(GENERATED_HOST_DIR, name)
-
-
 async def _submit_and_poll(payload: dict, timeout_s: int = 1800) -> dict:
     """提交生成任务并长轮询直到完成 (服务端阻塞)。返回 {"ok": bool, "file_url": str, "error": str}。"""
     async with httpx.AsyncClient(timeout=timeout_s) as client:
@@ -567,7 +546,7 @@ async def generate_image(prompt: str, width: int = 1024, height: int = 1024, see
     result = await _submit_and_poll(payload)
     if not result["ok"]:
         return f"图片生成失败: {result['error']}"
-    return f"图片已生成: {result['file_url']} (远程 agent 用 MCP 服务器 base URL + 此路径)"
+    return f"图片已生成: {MEDIA_GEN_PUBLIC_URL}{result['file_url']}"
 
 
 @mcp.tool()
@@ -586,7 +565,7 @@ async def generate_music(prompt: str, seed: int = None, duration: float = 30.0, 
     result = await _submit_and_poll(payload)
     if not result["ok"]:
         return f"音乐生成失败: {result['error']}"
-    return f"音乐已生成: {result['file_url']} (时长 {duration}s) (远程 agent 用 MCP 服务器 base URL + 此路径)"
+    return f"音乐已生成: {MEDIA_GEN_PUBLIC_URL}{result['file_url']} (时长 {duration}s)"
 
 
 def _abs_url(base_url: str, href: str) -> str:

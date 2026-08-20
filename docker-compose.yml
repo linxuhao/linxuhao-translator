@@ -108,10 +108,6 @@ services:
       - VLLM_URL=http://vllm_qwen:8000/v1/chat/completions
       - SEARXNG_URL=http://linxuhaserver:8888/search
       - MEDIA_GEN_URL=http://media_gen:9010
-      - GENERATED_HOST_DIR=/home/linxuhao/vip-gateway/generated
-    volumes:
-      - ./generated:/generated
-      - ./mcp-server/app.py:/app/app.py
     restart: unless-stopped
 
   # ==========================================
