@@ -95,34 +95,40 @@ DEFAULT_SAMPLE_TEXT = os.getenv(
     "江湖路远，人心难测。今日一别，山高水长，来日方长，后会有期。")
 _ACTOR_NAME_RE = re.compile(r"^[\w\u4e00-\u9fff-]{1,40}$")
 
-# ---- Character: 把长相钉在一张参考图上 ----
-# 和 actor 同一个病、同一个解法。text2img 每次给的是"长得不一样的人": 同一个角色
-# 的头像 / 战斗立绘 / 地图小人, 今天是三个人。定妆一次存成参考图, 之后每张图都
-# 带着它走图生图, 长相就跟场景描述解耦了。
-CHARACTERS_DIR = os.getenv("CHARACTERS_DIR", "/characters")
-# 定妆图的取景: 参考图要正面、全身、干净背景, 它是后面每一张的锚
-CHAR_FRAMING = os.getenv(
-    "CHAR_FRAMING",
-    "full body character reference, neutral standing pose, facing viewer, "
-    "plain flat background, clean game art")
+# ---- Subject: 把"长什么样"钉在一张定妆图上 ----
+# 和 actor 同一个病、同一个解法。text2img 每次给的是"长得不一样的东西": 同一个角色
+# 的头像 / 战斗立绘 / 地图小人是三个人; 同一个宝箱换个角度也是另一个箱子。
+# 定妆一次存成参考图, 之后每张图都带着它走图生图, 外观就跟场景描述解耦了。
+#
+# 角色和道具是同一个机制, 差别只在取景 —— 所以这里是一套存储, 用 kind 选取景,
+# 而不是把同样的 150 行复制两份。
+SUBJECTS_DIR = os.getenv("SUBJECTS_DIR", "/subjects")
+SUBJECT_FRAMING = {
+    "character": "full body character reference, neutral standing pose, facing viewer, "
+                 "plain flat background, clean game art",
+    # 道具用四分之三视角: 正投影看不出体积, 换个角度就没有可对齐的信息
+    "object": "single game asset reference, three-quarter view, centered, isolated, "
+              "plain flat background, no scenery, clean game art",
+}
+DEFAULT_SUBJECT_KIND = "character"
 
 
-def _char_paths(name):
-    return (os.path.join(CHARACTERS_DIR, name + ".png"),
-            os.path.join(CHARACTERS_DIR, name + ".json"))
+def _subject_paths(name):
+    return (os.path.join(SUBJECTS_DIR, name + ".png"),
+            os.path.join(SUBJECTS_DIR, name + ".json"))
 
 
-def _load_character(name):
-    _, meta = _char_paths(name)
+def _load_subject(name):
+    _, meta = _subject_paths(name)
     if not os.path.isfile(meta):
         return None
     with open(meta, encoding="utf-8") as f:
         return json.load(f)
 
 
-def _character_names():
+def _subject_names():
     try:
-        return sorted(f[:-5] for f in os.listdir(CHARACTERS_DIR) if f.endswith(".json"))
+        return sorted(f[:-5] for f in os.listdir(SUBJECTS_DIR) if f.endswith(".json"))
     except OSError:
         return []
 
@@ -262,12 +268,12 @@ def _ref_b64(path):
 def _run_image(job):
     t = time.time()
     ref, prompt = job.get("image"), job["prompt"]
-    character = job.get("character")
-    if character:
-        # 角色场景图: 长相由参考图决定, prompt 只管场景/动作
-        c = _load_character(character)
+    subject = job.get("subject")
+    if subject:
+        # 场景图: 外观由定妆图决定, prompt 只管场景/动作/视角
+        c = _load_subject(subject)
         if c is None:
-            raise RuntimeError(f"character '{character}' 不存在")
+            raise RuntimeError(f"subject '{subject}' 不存在")
         ref = _ref_b64(c["reference_path"])
         prompt = f'{c["appearance"]}, {prompt}'
     data, ext = _sd_generate(job, prompt, ref)
@@ -276,25 +282,26 @@ def _run_image(job):
     with open(out, "wb") as f:
         f.write(data)
     log.info("[sd_server] ok in %.1fs%s", time.time() - t,
-             f" (character={character})" if character else "")
+             f" (subject={subject})" if subject else "")
     _fit_size(out, job.get("want_width", job["width"]), job.get("want_height", job["height"]))
     _check_image(out)
     return name
 
 
-def _run_char_create(job):
-    """定妆: 生成一张参考图存成角色。和铸声一样走任务队列 —— 它要用 GPU。"""
+def _run_subject_create(job):
+    """定妆: 生成一张参考图存成 subject。和铸声一样走任务队列 —— 它要用 GPU。"""
     t = time.time()
-    name = job["character"]
-    png, meta_path = _char_paths(name)
-    prompt = f'{job["prompt"]}, {CHAR_FRAMING}'
+    name, kind = job["subject"], job.get("kind") or DEFAULT_SUBJECT_KIND
+    png, meta_path = _subject_paths(name)
+    prompt = f'{job["prompt"]}, {SUBJECT_FRAMING[kind]}'
     data, _ = _sd_generate(job, prompt)
-    os.makedirs(CHARACTERS_DIR, exist_ok=True)
+    os.makedirs(SUBJECTS_DIR, exist_ok=True)
     with open(png, "wb") as f:
         f.write(data)
-    _check_image(png)          # 退化的参考图会污染这个角色的每一张场景图
+    _check_image(png)          # 退化的定妆图会污染这个 subject 的每一张场景图
     meta = {
         "name": name,
+        "kind": kind,
         "appearance": job["prompt"],
         "prompt": prompt,
         "reference_path": png,
@@ -303,9 +310,9 @@ def _run_char_create(job):
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
-    log.info("[character] 定妆 %s 完成 (%.1fs)", name, time.time() - t)
-    return None, {"character": name, "appearance": job["prompt"],
-                  "reference_url": f"/v1/characters/{name}/image"}
+    log.info("[subject] 定妆 %s (%s) 完成 (%.1fs)", name, kind, time.time() - t)
+    return None, {"subject": name, "kind": kind, "appearance": job["prompt"],
+                  "reference_url": f"/v1/subjects/{name}/image"}
 
 
 def _fit_size(path, want_w, want_h):
@@ -450,7 +457,7 @@ def _run_speech(job):
 
 
 _RUNNERS = {"image": _run_image, "music": _run_music, "speech": _run_speech,
-            "actor_create": _run_actor_create, "char_create": _run_char_create}
+            "actor_create": _run_actor_create, "subject_create": _run_subject_create}
 
 
 def _worker():
@@ -499,10 +506,11 @@ threading.Thread(target=_worker, daemon=True).start()
 
 # ---- 请求体 ----
 class JobRequest(BaseModel):
-    type: str = Field(..., description="image / music / speech / actor_create / char_create")
+    type: str = Field(..., description="image / music / speech / actor_create / subject_create")
     prompt: str = ""                  # speech 时是要念的文本; actor_create 时是铸声台词
     actor: str | None = None          # speech: 用哪个角色的音色; actor_create: 角色名
-    character: str | None = None      # image: 用哪个角色的长相; char_create: 角色名
+    subject: str | None = None        # image: 用哪个 subject 的外观; subject_create: 名字
+    kind: str | None = None           # subject_create: character / object (只影响取景)
     instruct: str | None = None       # 声音的自然语言描述 (actor_create 必填)
     force: bool = False               # actor_create: 覆盖已有角色
     speaking_rate: float | None = None
@@ -522,20 +530,24 @@ async def submit_job(req: JobRequest):
         return JSONResponse({"error": f"type 必须是 {'/'.join(_RUNNERS)}"}, status_code=400)
     job = req.model_dump()
     clamped = None
-    if req.type == "char_create":
-        name = (req.character or "").strip()
+    if req.type == "subject_create":
+        name = (req.subject or "").strip()
+        kind = (req.kind or DEFAULT_SUBJECT_KIND).strip()
         if not _ACTOR_NAME_RE.match(name):
-            return JSONResponse({"error": "character 名只能是字母/数字/下划线/连字符/中文, 1~40 字"},
+            return JSONResponse({"error": "subject 名只能是字母/数字/下划线/连字符/中文, 1~40 字"},
+                                status_code=400)
+        if kind not in SUBJECT_FRAMING:
+            return JSONResponse({"error": f"kind 必须是 {'/'.join(SUBJECT_FRAMING)}"},
                                 status_code=400)
         if not req.prompt.strip():
-            return JSONResponse({"error": "char_create 的 prompt 是长相描述, 不能为空"},
+            return JSONResponse({"error": "subject_create 的 prompt 是外观描述, 不能为空"},
                                 status_code=400)
-        if _load_character(name) is not None and not req.force:
+        if _load_subject(name) is not None and not req.force:
             return JSONResponse(
-                {"error": f"character '{name}' 已存在。定妆一次用一辈子, 覆盖会让它之前"
-                          f"所有场景图的长相对不上 —— 确实要重定就传 force=true。"},
+                {"error": f"subject '{name}' 已存在。定妆一次用一辈子, 覆盖会让它之前"
+                          f"所有场景图的外观对不上 —— 确实要重定就传 force=true。"},
                 status_code=409)
-        job["character"] = name
+        job["subject"], job["kind"] = name, kind
         job["want_width"] = job["width"] = max(256, min(req.width, MAX_IMAGE_SIZE))
         job["want_height"] = job["height"] = max(256, min(req.height, MAX_IMAGE_SIZE))
     elif req.type == "image":
@@ -550,11 +562,12 @@ async def submit_job(req: JobRequest):
         job["height"] = max(256, job["want_height"])
         if (job["want_width"], job["want_height"]) != (req.width, req.height):
             clamped = {"width": job["want_width"], "height": job["want_height"]}
-        if req.character and _load_character(req.character) is None:
+        if req.subject and _load_subject(req.subject) is None:
             return JSONResponse(
-                {"error": f"character '{req.character}' 不存在 —— 先调 "
-                          f"create_character(name='{req.character}', appearance='一段长相描述') "
-                          f"定妆, 再用它出场景图。现有角色: {_character_names() or '(还没有)'}"},
+                {"error": f"subject '{req.subject}' 不存在 —— 先调 "
+                          f"create_character / create_object (name='{req.subject}', "
+                          f"appearance='一段外观描述') 定妆, 再用它出场景图。"
+                          f"现有: {_subject_names() or '(还没有)'}"},
                 status_code=404)
     elif req.type == "actor_create":
         name = (req.actor or "").strip()
@@ -1151,23 +1164,23 @@ def sfx_presets():
     return {"presets": sorted(SFX_PRESETS), "params": asdict(SfxParams()), "rate": SFX_RATE}
 
 
-@app.get("/v1/characters")
-async def list_characters():
+@app.get("/v1/subjects")
+async def list_subjects():
     out = []
-    for n in _character_names():
-        c = _load_character(n)
+    for n in _subject_names():
+        c = _load_subject(n)
         if c:
-            out.append({k: c.get(k) for k in ("name", "appearance", "created")})
-    return {"characters": out}
+            out.append({k: c.get(k) for k in ("name", "kind", "appearance", "created")})
+    return {"subjects": out}
 
 
-@app.get("/v1/characters/{name}/image")
-async def character_image(name: str):
-    """角色的定妆参考图。定妆之后应该先看一眼再拿它出整部戏的图。"""
+@app.get("/v1/subjects/{name}/image")
+async def subject_reference(name: str):
+    """定妆参考图。定妆之后应该先看一眼, 再拿它出整部戏的图。"""
     safe = os.path.basename(name)
-    png, _ = _char_paths(safe)
+    png, _ = _subject_paths(safe)
     if not os.path.isfile(png):
-        return JSONResponse({"error": f"character '{safe}' 不存在"}, status_code=404)
+        return JSONResponse({"error": f"subject '{safe}' 不存在"}, status_code=404)
     return FileResponse(png)
 
 
@@ -1188,10 +1201,10 @@ async def delete_actor(name: str):
     return _drop(_actor_paths(safe), "actor", safe)
 
 
-@app.delete("/v1/characters/{name}")
-async def delete_character(name: str):
+@app.delete("/v1/subjects/{name}")
+async def delete_subject(name: str):
     safe = os.path.basename(name)
-    return _drop(_char_paths(safe), "character", safe)
+    return _drop(_subject_paths(safe), "subject", safe)
 
 
 @app.get("/v1/actors")
