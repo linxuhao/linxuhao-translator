@@ -60,8 +60,20 @@ SPEECH_MODEL_ID = os.getenv("SPEECH_MODEL_ID", "qwen3-tts")
 # Qwen3-TTS VoiceDesign: 声音由一段自然语言描述决定, 不需要参考音频 ——
 # 虚构角色本来就没有真人录音, 但一定有人设描述。
 DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "A neutral adult narrator, clear and natural")
-# 文本长度上限: 引擎会把长文本切段生成, 不设限就可能一个请求跑十几分钟
-MAX_SPEECH_CHARS = int(os.getenv("MAX_SPEECH_CHARS", "600"))
+# 文本长度上限 —— 这是护栏, 不是礼貌性的限制。实测:
+#   201 字 -> 45.7 s 音频, 生成 16 s   OK
+#   402 字 -> 90.3 s 音频, 生成 42 s   OK
+#   600 字 -> ~135 s 音频, 生成 ~63 s  GPU 挂死 (amdgpu GPU reset(6),
+#             连带 GPU0 的 vllm SIGSEGV) —— 与音乐那条算力预算同一类问题:
+#             单次 Vulkan 提交扛不住这么长的持续计算。
+# 200 字取在已知安全值 (402) 的一半, 而且 200 字已经是 45 秒旁白 ——
+# 游戏里一句 NPC 台词通常 10~40 字, 这个上限不会碰到。更长的文本请分多次调用。
+MAX_SPEECH_CHARS = int(os.getenv("MAX_SPEECH_CHARS", "200"))
+# 字数上限只挡住"输入长", 挡不住"输出跑飞": 引擎默认 max_tokens=2048 (~170 s 音频),
+# 一句短台词一旦退化成循环, 照样能生成几分钟并拖挂 GPU。按字数推 token 预算,
+# 让跑飞的请求早早自己停下。实测 ~2.7 token/字, 取 4.0 留余量。
+SPEECH_TOKENS_PER_CHAR = float(os.getenv("SPEECH_TOKENS_PER_CHAR", "4.0"))
+SPEECH_MAX_TOKENS = int(os.getenv("SPEECH_MAX_TOKENS", "900"))
 # 引擎冷启动的等待上限 (宿主机重启后要从磁盘重读 12.6 GB 权重)
 ENGINE_WAIT_S = float(os.getenv("ENGINE_WAIT_S", "180"))
 # 生成产物保留天数; 0 表示不清理
@@ -234,6 +246,8 @@ def _run_speech(job):
         "task_route": "vdes",
         "text": job["prompt"],
         "instruct": job.get("instruct") or DEFAULT_VOICE,
+        "max_tokens": max(64, min(SPEECH_MAX_TOKENS,
+                                  int(len(job["prompt"]) * SPEECH_TOKENS_PER_CHAR))),
     }
     if job.get("seed") is not None:
         req["seed"] = job["seed"]
