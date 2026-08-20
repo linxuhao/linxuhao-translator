@@ -23,12 +23,13 @@
 import asyncio
 import io
 import os
+import time
 import uuid
 import base64
 
 import httpx
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, FileResponse
 from fastmcp import FastMCP
 from PIL import Image
 from cachetools import LRUCache
@@ -44,6 +45,11 @@ ASR_MODEL = os.getenv("ASR_MODEL_NAME", "qwen3-asr")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://linxuhaserver:8888/search")
+
+MEDIA_GEN_URL = os.getenv("MEDIA_GEN_URL", "http://media_gen:9010")
+MEDIA_GEN_TIMEOUT = 600.0
+GENERATED_DIR = os.getenv("GENERATED_DIR", "/generated")
+GENERATED_HOST_DIR = os.getenv("GENERATED_HOST_DIR", "/home/linxuhao/vip-gateway/generated")
 
 TIMEOUT = 60.0
 
@@ -63,25 +69,28 @@ file_storage = LRUCache(maxsize=50)
 mcp = FastMCP(
     "asr-ocr-pdf-web-mcp",
     instructions=(
-        "本服务器提供 ASR 语音转录、OCR 图片识别、PDF 文字提取、网页搜索功能。\n\n"
+        "本服务器提供: ASR 语音转录、OCR 图片识别、PDF 文字提取、网页搜索、以及 AI 媒体生成 (文生图 + 文生音乐)。\n\n"
         "支持的格式:\n"
         "  Audio: webm, mp4, mp3, wav, ogg, flac, aac, m4a, opus 等 (FFmpeg 支持的全部)\n"
         "  Image: png, jpg/jpeg, gif, bmp, tiff, webp 等 (PIL 支持的全部)\n"
         "  PDF:   pdf\n\n"
-        "【重要】上传文件不是 MCP tool，而是 REST HTTP 端点。\n"
-        "上传前需要先从你的 MCP config 中找到本服务器的 URL（通常是 http://xxx:9003），\n"
-        "然后用 curl 或 HTTP 请求上传:\n"
-        "  curl -X POST <MCP_URL>/upload/audio -F 'file=@audio.webm'\n"
-        "  curl -X POST <MCP_URL>/upload/image -F 'file=@image.png'\n"
-        "  curl -X POST <MCP_URL>/upload/pdf   -F 'file=@doc.pdf'\n"
-        "上传成功后返回 {\"file_id\": \"xxx\"}，再用该 file_id 调用 MCP tool。\n\n"
-        "MCP 工具调用:\n"
+        "【上传文件】不是 MCP tool，而是 REST HTTP 端点:\n"
+        "  curl -X POST <MCP_URL>/upload/audio -F 'file=@audio.webm'   -> {\"file_id\": \"xxx\"}\n"
+        "  curl -X POST <MCP_URL>/upload/image -F 'file=@image.png'   -> {\"file_id\": \"xxx\"}\n"
+        "  curl -X POST <MCP_URL>/upload/pdf   -F 'file=@doc.pdf'     -> {\"file_id\": \"xxx\"}\n\n"
+        "【媒体生成】generate_image / generate_music:\n"
+        "  - 内部是异步任务, 提交后阻塞等待完成 (最长 ~30 分钟), 返回生成文件的下载 URL。\n"
+        "  - 生成的文件通过 <MCP_URL>/files/{name} 下载 (name 取自返回的 file_url)。\n"
+        "  - generate_image 支持图生图: 传 reference_image_file_id (先上传参考图) 或 reference_image_base64。\n"
+        "  - generate_music 支持 duration (音频秒数, 最长 47) 和 num_inference_steps。\n\n"
+        "MCP 工具:\n"
         "  transcribe_audio(audio_file_id='...')\n"
         "  ocr_image(image_file_id='...')\n"
         "  ocr_pdf(pdf_file_id='...')\n"
         "  web_search(query='...')\n"
-        "  web_fetch(url='...', prompt='...', max_length=8000, parse_media=False)\n\n"
-        "也支持直接传 URL 或 base64，但优先使用 file_id。"
+        "  web_fetch(url='...', prompt='...', max_length=8000, parse_media=False)\n"
+        "  generate_image(prompt='...', width?, height?, seed?, reference_image_file_id?)\n"
+        "  generate_music(prompt='...', seed?, duration?, num_inference_steps?)\n"
     ),
 )
 
@@ -171,6 +180,16 @@ async def upload_pdf(request: Request) -> JSONResponse:
     file_id = str(uuid.uuid4())
     file_storage[file_id] = content
     return JSONResponse({"file_id": file_id, "size": len(content)})
+
+
+@mcp.custom_route("/files/{filename}", methods=["GET"])
+async def serve_generated(request: Request) -> FileResponse:
+    """下载生成的文件 (图片/音乐), 供远程 agent 通过 URL 获取。"""
+    filename = os.path.basename(request.path_params["filename"])  # 防目录穿越
+    path = os.path.join(GENERATED_DIR, filename)
+    if not os.path.exists(path):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path)
 
 
 # ==========================================
@@ -498,6 +517,78 @@ async def web_fetch(url: str, prompt: str = None, max_length: int = 8000, parse_
     return result
 
 
+def _save_generated(data: bytes, prefix: str, ext: str) -> str:
+    """将生成结果写入共享卷, 返回宿主机绝对路径。"""
+    os.makedirs(GENERATED_DIR, exist_ok=True)
+    name = f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
+    path = os.path.join(GENERATED_DIR, name)
+    with open(path, "wb") as f:
+        f.write(data)
+    return os.path.join(GENERATED_HOST_DIR, name)
+
+
+async def _submit_and_poll(payload: dict, timeout_s: int = 1800) -> dict:
+    """提交生成任务并长轮询直到完成 (服务端阻塞)。返回 {"ok": bool, "file_url": str, "error": str}。"""
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        r = await client.post(f"{MEDIA_GEN_URL}/v1/jobs", json=payload)
+        r.raise_for_status()
+        job_id = r.json()["job_id"]
+        # 一次阻塞 GET (长轮询), 服务端阻塞到完成/失败/超时
+        st = await client.get(f"{MEDIA_GEN_URL}/v1/jobs/{job_id}", params={"timeout": timeout_s})
+        data = st.json()
+    status = data.get("status")
+    if status == "done":
+        return {"ok": True, "file_url": data.get("file_url")}
+    if status == "failed":
+        return {"ok": False, "error": data.get("error", "unknown error")}
+    return {"ok": False, "error": f"任务状态: {status}"}
+
+
+@mcp.tool()
+async def generate_image(prompt: str, width: int = 1024, height: int = 1024, seed: int = None,
+                         reference_image_file_id: str = None, reference_image_base64: str = None) -> str:
+    """使用 FLUX.2 Klein 4B 生成图片 (文生图/图生图), 保存为文件并返回下载 URL。
+
+    参数:
+        prompt: 图片描述 (英文效果最佳)
+        width: 宽度 (上限 768, 超出会被 clamp)
+        height: 高度 (上限 768, 超出会被 clamp)
+        seed: 随机种子 (可选, 固定后结果可复现)
+        reference_image_file_id: 参考图 file_id (先 POST /upload/image 上传获得), 用于图生图
+        reference_image_base64: 参考图 base64 (可选, 与 file_id 二选一)
+
+    返回: 生成文件的下载 URL (用 MCP 服务器 base URL + 该路径获取)
+    """
+    payload = {"type": "image", "prompt": prompt, "width": width, "height": height, "seed": seed}
+    if reference_image_file_id and reference_image_file_id in file_storage:
+        payload["image"] = base64.b64encode(file_storage[reference_image_file_id]).decode()
+    elif reference_image_base64:
+        payload["image"] = reference_image_base64
+    result = await _submit_and_poll(payload)
+    if not result["ok"]:
+        return f"图片生成失败: {result['error']}"
+    return f"图片已生成: {result['file_url']} (远程 agent 用 MCP 服务器 base URL + 此路径)"
+
+
+@mcp.tool()
+async def generate_music(prompt: str, seed: int = None, duration: float = 30.0, num_inference_steps: int = 100) -> str:
+    """使用 Stable Audio Open 生成音乐, 保存为 WAV 文件并返回下载 URL。
+
+    参数:
+        prompt: 音乐描述 (风格/乐器/情绪, 英文效果最佳)
+        seed: 随机种子 (可选, 固定后结果可复现)
+        duration: 音频时长秒数 (最长 47 秒, 默认 30)
+        num_inference_steps: 推理步数 (默认 100, 越多质量越好越慢)
+
+    返回: 生成文件的下载 URL (用 MCP 服务器 base URL + 该路径获取)
+    """
+    payload = {"type": "music", "prompt": prompt, "seed": seed, "audio_end_in_s": duration, "num_inference_steps": num_inference_steps}
+    result = await _submit_and_poll(payload)
+    if not result["ok"]:
+        return f"音乐生成失败: {result['error']}"
+    return f"音乐已生成: {result['file_url']} (时长 {duration}s) (远程 agent 用 MCP 服务器 base URL + 此路径)"
+
+
 def _abs_url(base_url: str, href: str) -> str:
     """Resolve relative URL against base."""
     from urllib.parse import urljoin
@@ -638,6 +729,8 @@ if __name__ == "__main__":
     print("  ocr_pdf(pdf_base64?, pdf_file_id?, pdf_url?)")
     print("  web_search(query=..., categories=?, language=?, time_range=?, max_results=?)")
     print("  web_fetch(url=..., max_length=?)")
+    print("  generate_image(prompt=..., width?, height?, seed?)")
+    print("  generate_music(prompt=..., seed?)")
     print("=" * 60)
 
     uvicorn.run(mcp.http_app(), host="0.0.0.0", port=9003)

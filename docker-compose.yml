@@ -85,11 +85,11 @@ services:
     entrypoint: []
     # 【关键修复 2】：手动指定 bash 执行环境
     command: >
-      vllm serve Qwen/Qwen3-ASR-1.7B
+      vllm serve Qwen/Qwen3-ASR-0.6B
       --dtype float16
-      --max-model-len 8192
-      --gpu-memory-utilization 0.85
-      --max-num-seqs 80
+      --max-model-len 4096
+      --gpu-memory-utilization 0.20
+      --max-num-seqs 32
       --served-model-name qwen3-asr
       --trust-remote-code
     restart: unless-stopped
@@ -107,4 +107,38 @@ services:
       - ASR_URL=http://qwen3_asr:8000/v1/chat/completions
       - VLLM_URL=http://vllm_qwen:8000/v1/chat/completions
       - SEARXNG_URL=http://linxuhaserver:8888/search
+      - MEDIA_GEN_URL=http://media_gen:9010
+      - GENERATED_HOST_DIR=/home/linxuhao/vip-gateway/generated
+    volumes:
+      - ./generated:/generated
+      - ./mcp-server/app.py:/app/app.py
+    restart: unless-stopped
+
+  # ==========================================
+  # GPU 1 (7800 XT): 媒体生成 (文生图 FLUX.2 Klein + 文生音乐 ACE-Step)
+  # ==========================================
+  media-gen:
+    build:
+      context: ./media-gen
+    container_name: media_gen
+    ports:
+      - "9010:9010"
+    devices:
+      - "/dev/kfd:/dev/kfd"
+      - "/dev/dri:/dev/dri"
+    group_add:
+      - "44"
+      - "992"
+    environment:
+      - HIP_VISIBLE_DEVICES=1
+      - HSA_OVERRIDE_GFX_VERSION=11.0.0
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - MAX_IMAGE_SIZE=768
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+      - ./media-gen/app.py:/app/app.py
+      - ./cache/torch:/root/.cache/torch
+      - ./cache/triton:/root/.triton
+      - ./generated:/generated
     restart: unless-stopped

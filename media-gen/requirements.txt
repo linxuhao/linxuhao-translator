@@ -1,0 +1,10 @@
+diffusers
+transformers
+accelerate
+safetensors
+fastapi
+uvicorn
+numpy
+pillow
+sentencepiece
+torchsde

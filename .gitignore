@@ -217,3 +217,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# AI 媒体生成运行时产物 (media-gen 生成文件 + 编译缓存)
+generated/
+cache/
