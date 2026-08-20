@@ -155,7 +155,7 @@ def _run_image(job):
         prompt=job["prompt"],
         height=job["height"],
         width=job["width"],
-        num_inference_steps=job.get("num_inference_steps", 4),
+        num_inference_steps=job.get("num_inference_steps") or 4,
         guidance_scale=job.get("guidance_scale", 1.0),
         generator=gen,
     )
@@ -175,7 +175,7 @@ def _run_music(job):
     out = pipe(
         prompt=job["prompt"],
         generator=gen,
-        num_inference_steps=job.get("num_inference_steps", 100),
+        num_inference_steps=job.get("num_inference_steps") or 100,
         audio_end_in_s=job.get("audio_end_in_s", 30.0),
     )
     audio = out.audios[0]
@@ -218,10 +218,10 @@ class JobRequest(BaseModel):
     prompt: str
     width: int = 768
     height: int = 768
-    num_inference_steps: int = None
+    num_inference_steps: int | None = None
     guidance_scale: float = 1.0
-    seed: int = None
-    image: str = None  # base64 参考图, 传入即为图生图
+    seed: int | None = None
+    image: str | None = None  # base64 参考图, 传入即为图生图
     audio_end_in_s: float = 30.0
 
 
