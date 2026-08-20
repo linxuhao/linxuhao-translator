@@ -147,6 +147,7 @@ services:
       - SD_SERVER=http://sd_server:9020
       - AUDIO_SERVER=http://audiocpp_server:9021
       - ENGINE_WAIT_S=180      # 引擎冷启动要从磁盘重读 12.6 GB 权重
+      - AUDIO_IDLE_UNLOAD_S=120   # 空闲 120s 后卸掉音频模型, 显卡回到零常驻
       - RETENTION_DAYS=30      # 生成产物保留 30 天, 0 = 不清理
     volumes:
       - ./media-gen/app.py:/app/app.py

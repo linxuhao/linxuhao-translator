@@ -89,6 +89,11 @@ SPEECH_MAX_TOKENS = int(os.getenv("SPEECH_MAX_TOKENS", "900"))
 ACTORS_DIR = os.getenv("ACTORS_DIR", "/actors")
 CLONE_MODEL_ID = os.getenv("CLONE_MODEL_ID", "qwen3-tts-base")
 _AUDIO_MODELS = {AUDIO_MODEL_ID, SPEECH_MODEL_ID, CLONE_MODEL_ID}
+# 空闲这么久之后把音频模型全卸掉, 让整张卡回到零常驻。
+# 不"用完立刻卸"是因为重载要 4.3 s —— 连着配十句台词的人不该每句都付这个钱;
+# 也不能不卸, 否则这张卡在用户不用我们的时候仍被占着 2 GB, 打不了游戏。
+# 0 = 关闭空闲卸载 (始终常驻)。
+AUDIO_IDLE_UNLOAD_S = float(os.getenv("AUDIO_IDLE_UNLOAD_S", "120"))
 # 铸声用的台词: 覆盖面尽量广, 时长 ~7 s (克隆参考音的常用区间)
 DEFAULT_SAMPLE_TEXT = os.getenv(
     "DEFAULT_SAMPLE_TEXT",
@@ -373,6 +378,32 @@ def _run_music(job):
     return name
 
 
+# 空闲卸载的状态。生图那半不需要这套 —— sd_server 开着 --offload-to-cpu,
+# 权重根本不常驻显存, 实测生图结束 2 s 内就回到 0.21 GB 并一直保持。
+_audio_state = {"last_use": 0.0, "loaded": False}
+_busy = threading.Event()
+
+
+def _unload_all_audio(reason):
+    try:
+        _post(f"{AUDIO_SERVER}/v1/tasks/unload_models",
+              {"model_ids": sorted(_AUDIO_MODELS)}, "audiocpp_server", timeout=120)
+        _audio_state["loaded"] = False
+        log.info("音频模型已全部卸载 (%s), 显卡回到零常驻", reason)
+    except Exception:
+        log.warning("空闲卸载失败, 下次再试", exc_info=True)
+
+
+def _audio_idle_loop():
+    """空闲够久就把显存还给用户。"""
+    while True:
+        time.sleep(5)
+        if AUDIO_IDLE_UNLOAD_S <= 0 or not _audio_state["loaded"] or _busy.is_set():
+            continue
+        if time.time() - _audio_state["last_use"] >= AUDIO_IDLE_UNLOAD_S:
+            _unload_all_audio(f"空闲 {AUDIO_IDLE_UNLOAD_S:.0f}s")
+
+
 def _use_audio_model(keep):
     """同一时刻只让一个音频模型占着显存。
 
@@ -382,6 +413,7 @@ def _use_audio_model(keep):
     media_gen 本来就是单 worker 串行, 同一时刻只需要一个 —— 重载实测 4.3 s
     (权重在 page cache 里), 只在音乐/配音/铸声之间切换时才付这个钱。
     卸载失败不让任务失败: 那只是少省一点显存, 不是错误。"""
+    _audio_state.update(last_use=time.time(), loaded=True)
     others = sorted(_AUDIO_MODELS - {keep})
     if not others:
         return
@@ -471,6 +503,7 @@ def _worker():
         job_id, job = _job_queue.get()
         with _job_lock:
             _jobs[job_id]["status"] = "running"
+        _busy.set()                      # 空闲卸载绝不能打断正在跑的任务
         try:
             out = _RUNNERS[job["type"]](job)
             name, meta = out if isinstance(out, tuple) else (out, None)
@@ -480,6 +513,9 @@ def _worker():
             log.exception("job %s failed", job_id)
             with _job_lock:
                 _jobs[job_id].update(status="failed", error=str(e))
+        finally:
+            _audio_state["last_use"] = time.time()   # 空闲计时从任务结束算起
+            _busy.clear()
 
 
 def _cleanup_loop():
@@ -507,6 +543,7 @@ def _cleanup_loop():
 
 
 threading.Thread(target=_cleanup_loop, daemon=True).start()
+threading.Thread(target=_audio_idle_loop, daemon=True).start()
 threading.Thread(target=_worker, daemon=True).start()
 
 
