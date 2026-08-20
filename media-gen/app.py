@@ -27,6 +27,7 @@ import urllib.error
 import threading
 import logging
 import wave
+import re
 from dataclasses import dataclass, asdict
 
 import numpy as np
@@ -74,6 +75,45 @@ MAX_SPEECH_CHARS = int(os.getenv("MAX_SPEECH_CHARS", "200"))
 # 让跑飞的请求早早自己停下。实测 ~2.7 token/字, 取 4.0 留余量。
 SPEECH_TOKENS_PER_CHAR = float(os.getenv("SPEECH_TOKENS_PER_CHAR", "4.0"))
 SPEECH_MAX_TOKENS = int(os.getenv("SPEECH_MAX_TOKENS", "900"))
+
+# ---- Actor: 把音色钉死在一段参考音上 ----
+# VoiceDesign 只圈定一个大致的音色区间, 区间内每句台词各漂各的 (实测同 voice
+# 同 seed 四句台词基频极差 125 Hz; 关掉采样走贪心反而涨到 242 Hz —— 音色是
+# 文本的函数, 不是采样随机性, 所以锁 seed / temperature / top_k 都锁不住)。
+# 唯一的修法是换模型: 用 VoiceDesign 铸一句参考音, 之后所有台词交给 Base
+# 以那段音频克隆, 音色由参考音决定, 与台词内容无关。
+#
+# 参考音是长期资产, 不是产物, 所以单独挂一个卷。/generated 上有 30 天清理,
+# 它眼下不递归、也只删文件, 子目录"碰巧"安全 —— 但那是意外不是设计,
+# 哪天改成 os.walk, 全部角色的声音会在第 30 天集体静默消失。
+ACTORS_DIR = os.getenv("ACTORS_DIR", "/actors")
+CLONE_MODEL_ID = os.getenv("CLONE_MODEL_ID", "qwen3-tts-base")
+_AUDIO_MODELS = {AUDIO_MODEL_ID, SPEECH_MODEL_ID, CLONE_MODEL_ID}
+# 铸声用的台词: 覆盖面尽量广, 时长 ~7 s (克隆参考音的常用区间)
+DEFAULT_SAMPLE_TEXT = os.getenv(
+    "DEFAULT_SAMPLE_TEXT",
+    "江湖路远，人心难测。今日一别，山高水长，来日方长，后会有期。")
+_ACTOR_NAME_RE = re.compile(r"^[\w\u4e00-\u9fff-]{1,40}$")
+
+
+def _actor_paths(name):
+    return (os.path.join(ACTORS_DIR, name + ".wav"),
+            os.path.join(ACTORS_DIR, name + ".json"))
+
+
+def _load_actor(name):
+    _, meta = _actor_paths(name)
+    if not os.path.isfile(meta):
+        return None
+    with open(meta, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _actor_names():
+    try:
+        return sorted(f[:-5] for f in os.listdir(ACTORS_DIR) if f.endswith(".json"))
+    except OSError:
+        return []
 # 引擎冷启动的等待上限 (宿主机重启后要从磁盘重读 12.6 GB 权重)
 ENGINE_WAIT_S = float(os.getenv("ENGINE_WAIT_S", "180"))
 # 生成产物保留天数; 0 表示不清理
@@ -226,6 +266,7 @@ def _run_music(job):
         req["seed"] = job["seed"]
     if job.get("num_inference_steps"):
         req["num_inference_steps"] = job["num_inference_steps"]
+    _use_audio_model(AUDIO_MODEL_ID)
     res = _post(f"{AUDIO_SERVER}/v1/tasks/run", {"model": AUDIO_MODEL_ID, "request": req}, "audiocpp_server")
     b64 = res.get("audio")
     if not b64:
@@ -240,35 +281,97 @@ def _run_music(job):
     return name
 
 
+def _use_audio_model(keep):
+    """同一时刻只让一个音频模型占着显存。
+
+    三个音频模型 (音乐 / VoiceDesign / Base 克隆) 全常驻时实测峰值 15.70/16.00 GB,
+    再叠一张 1024 生图就把 GPU 挤挂了 (第三次 device lost)。而它们的显存是"用过就
+    留着"的: 三个都推理过是 11.09 GB, 卸掉两个降到 7.90, 全卸掉降到 3.62。
+    media_gen 本来就是单 worker 串行, 同一时刻只需要一个 —— 重载实测 4.3 s
+    (权重在 page cache 里), 只在音乐/配音/铸声之间切换时才付这个钱。
+    卸载失败不让任务失败: 那只是少省一点显存, 不是错误。"""
+    others = sorted(_AUDIO_MODELS - {keep})
+    if not others:
+        return
+    try:
+        _post(f"{AUDIO_SERVER}/v1/tasks/unload_models", {"model_ids": others}, "audiocpp_server",
+              timeout=120)
+    except Exception:
+        log.warning("卸载 %s 失败, 继续", others, exc_info=True)
+
+
+def _tts(model_id, req, tag):
+    _use_audio_model(model_id)
+    req["max_tokens"] = max(64, min(SPEECH_MAX_TOKENS,
+                                    int(len(req["text"]) * SPEECH_TOKENS_PER_CHAR)))
+    res = _post(f"{AUDIO_SERVER}/v1/tasks/run", {"model": model_id, "request": req}, tag)
+    b64 = res.get("audio")
+    if not b64:
+        raise RuntimeError(f"{model_id} returned no audio: {str(res)[:300]}")
+    return base64.b64decode(b64), res.get("timing") or {}
+
+
+def _run_actor_create(job):
+    """用 VoiceDesign 铸一句参考音, 存成角色。这一步走任务队列而不是同步端点,
+    是因为它要用 GPU —— 必须和生图/音乐串行, 否则显存会撞车。"""
+    t = time.time()
+    name, text = job["actor"], job["prompt"]
+    wav_path, meta_path = _actor_paths(name)
+    audio, tm = _tts(SPEECH_MODEL_ID, {
+        "task_route": "vdes", "text": text,
+        "instruct": job["instruct"], "seed": job.get("seed"),
+    }, "audiocpp_server")
+    os.makedirs(ACTORS_DIR, exist_ok=True)
+    with open(wav_path, "wb") as f:
+        f.write(audio)
+    _check_audio(wav_path)          # 退化的参考音会污染这个角色的每一句台词
+    meta = {
+        "name": name,
+        "voice": job["instruct"],
+        "transcript": text,          # Base 克隆要参考音的文字, 而这段是我们自己生成的
+        "reference_path": wav_path,  # 引擎和本服务挂的是同一个 /actors
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "seed": job.get("seed"),
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    log.info("[actor] 铸声 %s 完成 (%.1fs, rtf=%s)", name, time.time() - t, tm.get("rtf"))
+    return None, {"actor": name, "transcript": text,
+                  "reference_url": f"/v1/actors/{name}/audio"}
+
+
 def _run_speech(job):
     t = time.time()
-    req = {
-        "task_route": "vdes",
-        "text": job["prompt"],
-        "instruct": job.get("instruct") or DEFAULT_VOICE,
-        "max_tokens": max(64, min(SPEECH_MAX_TOKENS,
-                                  int(len(job["prompt"]) * SPEECH_TOKENS_PER_CHAR))),
-    }
+    actor = job.get("actor")
+    if actor:
+        # 角色台词: Base 模型克隆参考音, 音色与台词内容无关
+        a = _load_actor(actor)
+        if a is None:
+            raise RuntimeError(f"actor '{actor}' 不存在")
+        model_id = CLONE_MODEL_ID
+        req = {"task_route": "tts", "text": job["prompt"],
+               "voice_ref": a["reference_path"], "reference_text": a["transcript"]}
+    else:
+        # 一次性旁白: VoiceDesign 直接从描述生成, 不保证跨句音色一致
+        model_id = SPEECH_MODEL_ID
+        req = {"task_route": "vdes", "text": job["prompt"],
+               "instruct": job.get("instruct") or DEFAULT_VOICE}
     if job.get("seed") is not None:
         req["seed"] = job["seed"]
     if job.get("speaking_rate"):
         req["speaking_rate"] = job["speaking_rate"]
-    res = _post(f"{AUDIO_SERVER}/v1/tasks/run",
-                {"model": SPEECH_MODEL_ID, "request": req}, "audiocpp_server")
-    b64 = res.get("audio")
-    if not b64:
-        raise RuntimeError(f"audiocpp_server returned no audio: {str(res)[:300]}")
+    audio, tm = _tts(model_id, req, "audiocpp_server")
     name = _new_name("speech", "wav")
     out = os.path.join(GENERATED_DIR, name)
     with open(out, "wb") as f:
-        f.write(base64.b64decode(b64))
-    tm = res.get("timing") or {}
-    log.info("[audiocpp_server] speech ok in %.1fs (rtf=%s)", time.time() - t, tm.get("rtf"))
+        f.write(audio)
+    log.info("[%s] speech ok in %.1fs (rtf=%s)", model_id, time.time() - t, tm.get("rtf"))
     _check_audio(out)
     return name
 
 
-_RUNNERS = {"image": _run_image, "music": _run_music, "speech": _run_speech}
+_RUNNERS = {"image": _run_image, "music": _run_music, "speech": _run_speech,
+            "actor_create": _run_actor_create}
 
 
 def _worker():
@@ -277,9 +380,10 @@ def _worker():
         with _job_lock:
             _jobs[job_id]["status"] = "running"
         try:
-            name = _RUNNERS[job["type"]](job)
+            out = _RUNNERS[job["type"]](job)
+            name, meta = out if isinstance(out, tuple) else (out, None)
             with _job_lock:
-                _jobs[job_id].update(status="done", file=name)
+                _jobs[job_id].update(status="done", file=name, meta=meta)
         except Exception as e:
             log.exception("job %s failed", job_id)
             with _job_lock:
@@ -316,9 +420,11 @@ threading.Thread(target=_worker, daemon=True).start()
 
 # ---- 请求体 ----
 class JobRequest(BaseModel):
-    type: str = Field(..., description="image / music / speech")
-    prompt: str                       # speech 时是要念的文本
-    instruct: str | None = None       # speech: 声音的自然语言描述
+    type: str = Field(..., description="image / music / speech / actor_create")
+    prompt: str = ""                  # speech 时是要念的文本; actor_create 时是铸声台词
+    actor: str | None = None          # speech: 用哪个角色的音色; actor_create: 角色名
+    instruct: str | None = None       # 声音的自然语言描述 (actor_create 必填)
+    force: bool = False               # actor_create: 覆盖已有角色
     speaking_rate: float | None = None
     width: int = 512
     height: int = 512
@@ -348,10 +454,35 @@ async def submit_job(req: JobRequest):
         job["height"] = max(256, job["want_height"])
         if (job["want_width"], job["want_height"]) != (req.width, req.height):
             clamped = {"width": job["want_width"], "height": job["want_height"]}
+    elif req.type == "actor_create":
+        name = (req.actor or "").strip()
+        if not _ACTOR_NAME_RE.match(name):
+            return JSONResponse({"error": "actor 名只能是字母/数字/下划线/连字符/中文, 1~40 字"},
+                                status_code=400)
+        if not (req.instruct or "").strip():
+            return JSONResponse({"error": "actor_create 必须给 instruct (声音的自然语言描述)"},
+                                status_code=400)
+        if _load_actor(name) is not None and not req.force:
+            return JSONResponse(
+                {"error": f"actor '{name}' 已存在。铸声一次用一辈子, 覆盖会让它之前"
+                          f"所有台词的音色对不上 —— 确实要重铸就传 force=true。"},
+                status_code=409)
+        job["actor"] = name
+        text = (req.prompt or "").strip() or DEFAULT_SAMPLE_TEXT
+        job["prompt"] = text[:MAX_SPEECH_CHARS]
+        if len(text) > MAX_SPEECH_CHARS:
+            clamped = {"prompt_chars": MAX_SPEECH_CHARS}
     elif req.type == "speech":
         text = req.prompt.strip()
         if not text:
             return JSONResponse({"error": "speech 的 prompt 不能为空"}, status_code=400)
+        if req.actor and _load_actor(req.actor) is None:
+            # 指令式报错: 调用方是 LLM, 告诉它下一步该干什么, 而不是只说"没找到"
+            return JSONResponse(
+                {"error": f"actor '{req.actor}' 不存在 —— 先调 create_actor(name='{req.actor}', "
+                          f"voice='一段声音描述') 铸声, 再用它说台词。"
+                          f"现有角色: {_actor_names() or '(还没有)'}"},
+                status_code=404)
         job["prompt"] = text[:MAX_SPEECH_CHARS]
         if len(text) > MAX_SPEECH_CHARS:
             clamped = {"prompt_chars": MAX_SPEECH_CHARS}
@@ -361,7 +492,7 @@ async def submit_job(req: JobRequest):
             clamped = {"audio_end_in_s": job["audio_end_in_s"]}
     job_id = uuid.uuid4().hex
     with _job_lock:
-        _jobs[job_id] = {"status": "queued", "file": None, "error": None}
+        _jobs[job_id] = {"status": "queued", "file": None, "error": None, "meta": None}
     _job_queue.put((job_id, job))
     return {"job_id": job_id, "clamped": clamped}
 
@@ -376,7 +507,12 @@ async def get_job(job_id: str, timeout: float = 1800.0):
         if job is None:
             return JSONResponse({"status": "not_found"}, status_code=404)
         if job["status"] == "done":
-            return {"status": "done", "file_url": f"/files/{job['file']}"}
+            out = {"status": "done"}
+            if job.get("file"):
+                out["file_url"] = f"/files/{job['file']}"
+            if job.get("meta"):
+                out.update(job["meta"])
+            return out
         if job["status"] == "failed":
             return JSONResponse({"status": "failed", "error": job["error"]}, status_code=500)
         if time.time() > deadline:
@@ -911,6 +1047,26 @@ def gen_sfx(req: SfxRequest):
 @app.get("/v1/sfx_presets")
 def sfx_presets():
     return {"presets": sorted(SFX_PRESETS), "params": asdict(SfxParams()), "rate": SFX_RATE}
+
+
+@app.get("/v1/actors")
+async def list_actors():
+    out = []
+    for n in _actor_names():
+        a = _load_actor(n)
+        if a:
+            out.append({k: a.get(k) for k in ("name", "voice", "transcript", "created")})
+    return {"actors": out}
+
+
+@app.get("/v1/actors/{name}/audio")
+async def actor_audio(name: str):
+    """角色的参考音。铸声之后应该先听一遍再拿它录整部戏。"""
+    safe = os.path.basename(name)
+    wav, _ = _actor_paths(safe)
+    if not os.path.isfile(wav):
+        return JSONResponse({"error": f"actor '{safe}' 不存在"}, status_code=404)
+    return FileResponse(wav)
 
 
 @app.get("/health")

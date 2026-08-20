@@ -138,6 +138,8 @@ services:
     volumes:
       - ./media-gen/app.py:/app/app.py
       - ./generated:/generated
+      # 角色参考音: 长期资产, 和有 30 天清理的 ./generated 分开放
+      - ./actors:/actors
     depends_on:
       - sd-server
       - audiocpp-server
@@ -188,6 +190,8 @@ services:
       - /home/linxuhao/audiocpp/audio.cpp:/work:ro
       - /home/linxuhao/audiocpp/models:/models/audio:ro
       - ./media-gen/audio_server.json:/conf/audio_server.json:ro
+      # voice_ref 的路径由引擎解析, 所以它也要看得见同一个 /actors
+      - ./actors:/actors:ro
     command: >
       /work/build/linux-vulkan-release/bin/audiocpp_server
       --config /conf/audio_server.json --no-ui

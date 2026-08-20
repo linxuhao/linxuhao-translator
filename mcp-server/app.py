@@ -82,7 +82,7 @@ mcp = FastMCP(
         "  - 内部是异步任务, 提交后阻塞等待完成 (最长 ~30 分钟), 返回生成文件的下载 URL。\n"
         "  - 生成的文件由 media-gen 服务提供下载 (URL 已含在返回结果里, 远程部署时 MEDIA_GEN_PUBLIC_URL 指向模型机的 Tailscale IP)。\n"
         "  - generate_image 支持图生图: 传 reference_image_file_id (先上传参考图) 或 reference_image_base64。\n"
-        "  - generate_music 支持 duration (音频秒数, 最长 120) 和 num_inference_steps。\n  - generate_speech 是人声对白 (Qwen3-TTS VoiceDesign): voice 传一段声音描述, 不需要参考音频。\n\n"
+        "  - generate_music 支持 duration (音频秒数, 最长 120) 和 num_inference_steps。\n  - generate_speech 是一次性旁白: voice 传一段声音描述, 但跨句音色会漂, 不适合同一个角色说多句。\n  - 游戏 NPC 对白用 create_actor 铸声一次 + actor_tts 说每一句, 音色才稳定。\n\n"
         "MCP 工具:\n"
         "  transcribe_audio(audio_file_id='...')\n"
         "  ocr_image(image_file_id='...')\n"
@@ -91,7 +91,10 @@ mcp = FastMCP(
         "  web_fetch(url='...', prompt='...', max_length=8000, parse_media=False)\n"
         "  generate_image(prompt='...', width?, height?, seed?, reference_image_file_id?)\n"
         "  generate_music(prompt='...', seed?, duration?, num_inference_steps?)\n"
-        "  generate_speech(text='...', voice='一段声音描述', seed?, speaking_rate?)  # 游戏 NPC 对白\n"
+        "  generate_speech(text='...', voice='一段声音描述', seed?, speaking_rate?)  # 一次性旁白\n"
+        "  create_actor(name='郭靖', voice='一段声音描述')  # 给角色铸声, 返回试音 URL, 先听\n"
+        "  list_actors()\n"
+        "  actor_tts(actor='郭靖', text='台词')  # 同一角色每句音色一致\n"
         "  remove_bg(image_url='...', mode?)  # 抠成真 RGBA (FLUX 画的棋盘格不是透明)\n"
         "  slice_sheet(image_url='...', rows=2, cols=2, trim?)  # 网格 sprite sheet 切单帧\n"
         "  vision_critique(prompt='...', image_url='...')  # 自定义提问的看图点评\n"
@@ -516,14 +519,21 @@ async def _submit_and_poll(payload: dict, timeout_s: int = 1800) -> dict:
     """提交生成任务并长轮询直到完成 (服务端阻塞)。返回 {"ok": bool, "file_url": str, "error": str}。"""
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         r = await client.post(f"{MEDIA_GEN_URL}/v1/jobs", json=payload)
-        r.raise_for_status()
+        if r.status_code >= 400:
+            # 提交期的报错是写给调用方看的指令 (例如"先 create_actor 再说台词"),
+            # raise_for_status 会把它吞成一个无信息的 HTTP 异常。
+            try:
+                msg = r.json().get("error") or r.text
+            except Exception:
+                msg = r.text
+            return {"ok": False, "error": msg}
         job_id = r.json()["job_id"]
         # 一次阻塞 GET (长轮询), 服务端阻塞到完成/失败/超时
         st = await client.get(f"{MEDIA_GEN_URL}/v1/jobs/{job_id}", params={"timeout": timeout_s})
         data = st.json()
     status = data.get("status")
     if status == "done":
-        return {"ok": True, "file_url": data.get("file_url")}
+        return {"ok": True, **{k: v for k, v in data.items() if k != "status"}}
     if status == "failed":
         return {"ok": False, "error": data.get("error", "unknown error")}
     return {"ok": False, "error": f"任务状态: {status}"}
@@ -601,6 +611,74 @@ async def generate_speech(text: str, voice: str = None, seed: int = None,
     if not result["ok"]:
         return f"语音生成失败: {result['error']}"
     return f"语音已生成: {MEDIA_GEN_PUBLIC_URL}{result['file_url']}"
+
+
+@mcp.tool()
+async def create_actor(name: str, voice: str, sample_text: str = None,
+                       seed: int = None, force: bool = False) -> str:
+    """给一个角色铸声(定妆), 之后用 actor_tts 让他说任意台词都保持同一个音色。
+
+    为什么要有这一步: generate_speech 的 voice 描述只圈定一个大致的音色区间,
+    区间内每句台词各漂各的 —— 实测同 voice 同 seed 四句台词基频极差 125 Hz,
+    关掉采样走贪心反而涨到 242 Hz(音色是文本的函数, 不是采样随机性, 锁 seed 或
+    temperature 都锁不住)。本工具先用 voice 描述生成一段参考音, 之后所有台词
+    改由克隆模型照着这段参考音说, 音色与台词内容无关。实测极差降到 5~52 Hz。
+
+    重要: 铸完请先听 reference_url 那段试音, 确认是不是你要的那个人。铸砸了会把
+    整个角色锁死在错的音色上, 而且它之后每一句都错得很一致。不满意就 force=True 重铸。
+
+    参数:
+        name: 角色名(字母/数字/下划线/连字符/中文, 1~40 字), 之后 actor_tts 用它指代
+        voice: 声音的自然语言描述, 英文效果最佳。写年龄/性别/音色/语速/情绪,
+               例如 "An elderly Chinese man, gravelly chest voice, commanding"
+        sample_text: 铸声用的台词(可选)。默认用一段覆盖面较广的中文
+        seed: 随机种子(可选)
+        force: 覆盖已有角色。会让该角色之前所有台词的音色对不上, 慎用
+
+    返回: 试音片段的 URL —— 先听再用
+    """
+    r = await _submit_and_poll({"type": "actor_create", "actor": name, "instruct": voice,
+                                "prompt": sample_text or "", "seed": seed, "force": force})
+    if not r["ok"]:
+        return f"铸声失败: {r['error']}"
+    return (f"角色 '{r.get('actor', name)}' 已铸声。"
+            f"试音: {MEDIA_GEN_PUBLIC_URL}{r.get('reference_url')} "
+            f"(念的是: {r.get('transcript')})。"
+            f"先听一遍确认是不是你要的人, 不满意用 create_actor(..., force=True) 重铸。")
+
+
+@mcp.tool()
+async def list_actors() -> str:
+    """列出已铸声的角色(名字 + 当初的声音描述 + 铸声时间)。"""
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(f"{MEDIA_GEN_URL}/v1/actors")
+    actors = r.json().get("actors", [])
+    if not actors:
+        return "还没有角色。用 create_actor(name='...', voice='...') 铸一个。"
+    return "\n".join(f"- {a['name']}: {a['voice']} (铸于 {a['created']})" for a in actors)
+
+
+@mcp.tool()
+async def actor_tts(actor: str, text: str, speaking_rate: float = None,
+                    seed: int = None) -> str:
+    """让某个已铸声的角色说一句台词, 音色与他之前每一句都一致。
+
+    做游戏 NPC 对白用这个, 不要用 generate_speech —— 后者每句音色会漂。
+    角色不存在会告诉你先去 create_actor。
+
+    参数:
+        actor: 角色名(create_actor 时定的)
+        text: 台词, 上限 200 字(约 45 秒), 超出截断
+        speaking_rate: 语速倍率(可选)
+        seed: 随机种子(可选)
+
+    返回: 生成文件的下载 URL (24 kHz 单声道 WAV)
+    """
+    r = await _submit_and_poll({"type": "speech", "actor": actor, "prompt": text,
+                                "speaking_rate": speaking_rate, "seed": seed})
+    if not r["ok"]:
+        return f"配音失败: {r['error']}"
+    return f"{actor} 的台词已生成: {MEDIA_GEN_PUBLIC_URL}{r['file_url']}"
 
 
 async def _resolve_image_b64(image_base64, image_file_id, image_url):

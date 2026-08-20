@@ -14,7 +14,8 @@
       "mode": "offline",
       "session_options": {
         "stable_audio.mem_saver": true
-      }
+      },
+      "lazy": true
     },
     {
       "id": "qwen3-tts",
@@ -24,7 +25,19 @@
       "mode": "offline",
       "session_options": {
         "qwen3_tts.mem_saver": true
-      }
+      },
+      "lazy": true
+    },
+    {
+      "id": "qwen3-tts-base",
+      "family": "qwen3_tts",
+      "path": "/models/audio/Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+      "task": "tts",
+      "mode": "offline",
+      "session_options": {
+        "qwen3_tts.mem_saver": true
+      },
+      "lazy": true
     }
   ]
 }

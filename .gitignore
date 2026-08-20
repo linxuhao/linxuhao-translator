@@ -220,4 +220,9 @@ __marimo__/
 
 # AI 媒体生成运行时产物 (media-gen 生成文件 + 编译缓存)
 generated/
+# 角色参考音是运行时数据, 不进仓库。注意: 它不可复现 —— 同 voice 同 seed 重铸
+# 出来是另一个人 (复现性实测不可靠), 所以丢了就是永久丢了, 只能重新定妆。
+# 真要保住某个角色, 自己备份或 git add -f。
+actors/*.wav
+actors/*.json
 cache/
