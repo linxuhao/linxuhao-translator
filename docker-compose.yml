@@ -130,6 +130,8 @@ services:
       - MAX_IMAGE_SIZE=1024
       - SD_SERVER=http://sd_server:9020
       - AUDIO_SERVER=http://audiocpp_server:9021
+      - ENGINE_WAIT_S=180      # 引擎冷启动要从磁盘重读 12.6 GB 权重
+      - RETENTION_DAYS=30      # 生成产物保留 30 天, 0 = 不清理
     volumes:
       - ./media-gen/app.py:/app/app.py
       - ./generated:/generated
@@ -145,7 +147,8 @@ services:
   # 二进制与权重在仓库外 (体积大), 构建方式见 media-gen/README-vulkan.md。
   # ==========================================
   sd-server:
-    image: audiocpp-builder:vulkan
+    build:
+      context: ./engines
     container_name: sd_server
     ports:
       - "9020:9020"
@@ -168,7 +171,8 @@ services:
     restart: unless-stopped
 
   audiocpp-server:
-    image: audiocpp-builder:vulkan
+    build:
+      context: ./engines
     container_name: audiocpp_server
     ports:
       - "9021:9021"

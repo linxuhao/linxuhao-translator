@@ -23,6 +23,7 @@ import queue
 import asyncio
 import base64
 import urllib.request
+import urllib.error
 import threading
 import logging
 import wave
@@ -54,6 +55,11 @@ JOB_TIMEOUT_S = float(os.getenv("JOB_TIMEOUT_S", "900"))
 SD_SERVER = os.getenv("SD_SERVER", "http://sd_server:9020")
 AUDIO_SERVER = os.getenv("AUDIO_SERVER", "http://audiocpp_server:9021")
 AUDIO_MODEL_ID = os.getenv("AUDIO_MODEL_ID", "stable-audio")
+# 引擎冷启动的等待上限 (宿主机重启后要从磁盘重读 12.6 GB 权重)
+ENGINE_WAIT_S = float(os.getenv("ENGINE_WAIT_S", "180"))
+# 生成产物保留天数; 0 表示不清理
+RETENTION_DAYS = float(os.getenv("RETENTION_DAYS", "30"))
+CLEANUP_INTERVAL_S = float(os.getenv("CLEANUP_INTERVAL_S", "21600"))   # 6 小时
 
 # ---- 输出校验 ----
 # 今天最贵的教训: 旧实现在生成失败时写出一个全 0 的 WAV 却返回 status=done。
@@ -66,16 +72,33 @@ def _new_name(prefix, ext):
     return f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
 
 
+def _http(req, timeout, tag, retry_s=0.0):
+    """引擎冷启动时会拒连: sd_server 要读 12.6 GB 权重, 宿主机重启后 page cache 是冷的,
+    可能要几十秒才 listen。对连接错误重试, 对 HTTP 错误立即失败 (那是真错)。"""
+    deadline = time.time() + retry_s
+    delay = 0.5
+    while True:
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, ConnectionError, OSError) as e:
+            if time.time() >= deadline:
+                raise RuntimeError(f"{tag} 不可达 (已重试 {retry_s:.0f}s): {e}") from e
+            log.warning("[%s] 未就绪, %.1fs 后重试: %s", tag, delay, e)
+            time.sleep(delay)
+            delay = min(delay * 2, 5.0)
+
+
 def _post(url, payload, tag, timeout=None):
     body = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout or JOB_TIMEOUT_S) as r:
-        return json.loads(r.read())
+    return _http(req, timeout or JOB_TIMEOUT_S, tag, retry_s=ENGINE_WAIT_S)
 
 
-def _get(url, timeout=30):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        return json.loads(r.read())
+def _get(url, timeout=30, tag="engine", retry_s=0.0):
+    return _http(urllib.request.Request(url), timeout, tag, retry_s=retry_s)
 
 
 def _check_image(path):
@@ -186,6 +209,31 @@ def _worker():
                 _jobs[job_id].update(status="failed", error=str(e))
 
 
+def _cleanup_loop():
+    """删除超过 RETENTION_DAYS 的生成产物。文件名带时间戳但以 mtime 为准。"""
+    while True:
+        try:
+            if RETENTION_DAYS > 0:
+                cutoff = time.time() - RETENTION_DAYS * 86400
+                freed = n = 0
+                for f in os.listdir(GENERATED_DIR):
+                    fp = os.path.join(GENERATED_DIR, f)
+                    try:
+                        if os.path.isfile(fp) and os.path.getmtime(fp) < cutoff:
+                            freed += os.path.getsize(fp)
+                            os.remove(fp)
+                            n += 1
+                    except OSError:
+                        pass
+                if n:
+                    log.info("cleanup: 删除 %d 个超过 %.0f 天的文件, 释放 %.1f MiB",
+                             n, RETENTION_DAYS, freed / 2**20)
+        except Exception:
+            log.exception("cleanup 失败")
+        time.sleep(CLEANUP_INTERVAL_S)
+
+
+threading.Thread(target=_cleanup_loop, daemon=True).start()
 threading.Thread(target=_worker, daemon=True).start()
 
 
@@ -259,7 +307,7 @@ async def health():
     for name, url in (("sd_server", f"{SD_SERVER}/sdcpp/v1/capabilities"),
                       ("audiocpp_server", f"{AUDIO_SERVER}/health")):
         try:
-            _get(url, timeout=5)
+            _get(url, timeout=5, tag=name)
         except Exception as e:
             down.append(f"{name}: {e}")
     if down:
