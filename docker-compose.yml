@@ -107,10 +107,10 @@ services:
       - ASR_URL=http://qwen3_asr:8000/v1/chat/completions
       - VLLM_URL=http://vllm_qwen:8000/v1/chat/completions
       - SEARXNG_URL=http://linxuhaserver:8888/search
-      - MEDIA_GEN_URL=http://media_gen:9010
+      - MEDIA_GEN_URL=${MEDIA_GEN_URL:-http://media_gen:9010}
       # 工具返回的下载 URL 用这个前缀。不设的话会回落到上面的容器内主机名,
       # 而调用方 (linxuhaserver 上的 AItelier) 解析不了 media_gen —— 实测 curl 返回 000。
-      - MEDIA_GEN_PUBLIC_URL=http://100.68.74.107:9010
+      - MEDIA_GEN_PUBLIC_URL=${MEDIA_GEN_PUBLIC_URL:-http://100.68.74.107:9010}
     restart: unless-stopped
 
   # ==========================================
@@ -164,8 +164,8 @@ services:
       - "44"
       - "992"
     volumes:
-      - /home/linxuhao/audiocpp/stable-diffusion.cpp:/work:ro
-      - /home/linxuhao/audiocpp/sdmodels2:/models/sd:ro
+      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/stable-diffusion.cpp:/work:ro
+      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/sdmodels2:/models/sd:ro
     command: >
       /work/build/bin/sd-server
       --diffusion-model /models/sd/flux-2-klein-4b-Q8_0.gguf
@@ -188,8 +188,8 @@ services:
       - "44"
       - "992"
     volumes:
-      - /home/linxuhao/audiocpp/audio.cpp:/work:ro
-      - /home/linxuhao/audiocpp/models:/models/audio:ro
+      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/audio.cpp:/work:ro
+      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/models:/models/audio:ro
       - ./media-gen/audio_server.json:/conf/audio_server.json:ro
       # voice_ref 的路径由引擎解析, 所以它也要看得见同一个 /actors
       - ./actors:/actors:ro

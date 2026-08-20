@@ -48,7 +48,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libvulkan-dev vulkan-tools mesa-vulkan-drivers glslc glslang-tools \
       spirv-tools spirv-headers python3 python3-pip curl
 ```
-构建为 `audiocpp-builder:vulkan`，compose 直接用它跑两个 server。
+这个 Dockerfile 现在就在仓库里（`engines/Dockerfile`），两个 server 服务用
+`build: ./engines` 直接构建，不再依赖手工 `docker build` 出来的镜像。
+下面的 `docker run` 只是**编译源码**时用（编出来的二进制留在宿主机上）。
 
 ```bash
 git clone --depth 1 https://github.com/0xShug0/audio.cpp.git
@@ -74,6 +76,7 @@ docker run --rm -v $PWD/stable-diffusion.cpp:/work -w /work audiocpp-builder:vul
 | `qwen_3_4b.safetensors` (8.0 GB) | `Comfy-Org/flux2-klein-4B` `split_files/text_encoders/` |
 | `stable-audio-3-small-music-f16.gguf` (2.4 GB) | `audio-cpp/audio.cpp-gguf` |
 | `Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf` (2.7 GB) | `audio-cpp/audio.cpp-gguf` |
+| `Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf` (2.5 GB) | `audio-cpp/audio.cpp-gguf` |
 
 HF 缓存里 diffusers 格式的权重**不能直接用** —— sd.cpp 要 ComfyUI/BFL 单文件布局，
 张量命名不同，且会把 diffusers VAE 误判成 FLUX.1 的 16 通道（FLUX.2 是 32）。
@@ -262,3 +265,58 @@ VLM 判官在**几何**这条维度上是坏的：同一组图它给 9/9/10，�
 峰值出在生图（瞬时 +6.5 GB），而 media_gen 是单 worker 串行的，生图/音乐/配音
 不会同时占显存。真撞上限也是 Vulkan 的干净分配失败（任务报错），不是今天那种
 mode1 reset —— 那些是计算/队列挂死，不是分配失败。
+
+## 两台机的分工
+
+```
+linxuhao-ai     (有 GPU)  vllm-qwen / qwen3-asr / media-gen / sd-server / audiocpp-server
+linxuhaserver   (无 GPU)  mcp-server / gateway / cloudflared
+```
+
+网关机上的 `mcp-server` 要跨机访问 AI 机, 所以它的 `MEDIA_GEN_URL` /
+`MEDIA_GEN_PUBLIC_URL` / `VLLM_URL` / `ASR_URL` 必须指向 `linxuhao-ai`, 并且需要
+`extra_hosts` 把这个名字映射到 Tailscale 地址（容器内不走 MagicDNS）。
+
+URL 类的可以直接用 `.env` 覆盖；`extra_hosts` 表达不了, 所以网关机需要一个
+override 文件。模板在 **`deploy/linxuhaserver.override.yml`**：
+
+```bash
+# 只在 linxuhaserver 上做, AI 机不要放这个文件
+cp deploy/linxuhaserver.override.yml docker-compose.override.yml
+docker compose up -d mcp-server gateway cloudflared
+```
+
+之前这个 override 只存在于那台机的磁盘上、没有入库 —— 丢了整台网关机的配置就没了。
+现在模板在仓库里, 真正生效的 `docker-compose.override.yml` 仍然不入库
+（它一旦入库会在 AI 机上也自动生效, 那是错的）。
+
+## 从零部署
+
+仓库里有的：compose、三个 Dockerfile（`media-gen/`、`engines/`、`mcp-server/`）、
+服务代码、`audio_server.json`。三个镜像全部 `build:` 自本仓库，`docker compose build`
+就能重建，不依赖任何手工镜像。
+
+**仓库里没有的**，必须先在宿主机准备好（约 18 GB）：
+
+```
+$AUDIOCPP_ROOT/            # 默认 /home/linxuhao/audiocpp, 用 .env 改
+├── audio.cpp/             # 源码 + build/linux-vulkan-release/bin/audiocpp_server
+├── stable-diffusion.cpp/  # 源码 + build/bin/sd-server
+├── models/                # 音频权重 (见上面「权重」表)
+└── sdmodels2/             # 生图权重
+```
+
+换机器时**只需改 `.env` 里的 `AUDIOCPP_ROOT` 一个值**，compose 里不再有写死的路径。
+
+重建步骤：
+
+```bash
+cp .env.example .env          # 按需改 AUDIOCPP_ROOT / MEDIA_GEN_PUBLIC_URL
+# 按上面「构建引擎」「权重」两节准备 $AUDIOCPP_ROOT
+docker compose build          # 三个镜像
+docker compose up -d
+```
+
+**不可复现、也不在仓库里的东西**（`/actors`、`/subjects`）：参考音和定妆图。
+同样的 voice 描述和 seed 重铸出来是另一个人 —— 复现性实测不可靠。所以这两个目录
+丢了就是永久丢了，不是"重新生成一下"。真要保住某个角色，自己备份或 `git add -f`。

@@ -33,7 +33,7 @@ from dataclasses import dataclass, asdict
 import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from PIL import Image, ImageDraw
 
 logging.basicConfig(level=logging.INFO)
@@ -512,6 +512,11 @@ threading.Thread(target=_worker, daemon=True).start()
 
 # ---- 请求体 ----
 class JobRequest(BaseModel):
+    # 未知字段一律报错。Pydantic 默认是静默忽略, 于是一个写错的/过时的字段名
+    # (例如改名后还在传 character= 而不是 subject=) 会让请求"成功"地生成一张
+    # 完全没用上定妆图的普通图 —— 看起来是 done, 内容是错的。宁可 422。
+    model_config = ConfigDict(extra="forbid")
+
     type: str = Field(..., description="image / music / speech / actor_create / subject_create")
     prompt: str = ""                  # speech 时是要念的文本; actor_create 时是铸声台词
     actor: str | None = None          # speech: 用哪个角色的音色; actor_create: 角色名

@@ -228,3 +228,6 @@ actors/*.json
 subjects/*.png
 subjects/*.json
 cache/
+
+# 生效中的 override 是每台机自己的 (模板见 deploy/)。入库会在 AI 机上也自动生效, 那是错的。
+docker-compose.override.yml
