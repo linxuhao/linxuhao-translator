@@ -103,10 +103,16 @@ _ACTOR_NAME_RE = re.compile(r"^[\w\u4e00-\u9fff-]{1,40}$")
 # 角色和道具是同一个机制, 差别只在取景 —— 所以这里是一套存储, 用 kind 选取景,
 # 而不是把同样的 150 行复制两份。
 SUBJECTS_DIR = os.getenv("SUBJECTS_DIR", "/subjects")
+# 三类要盯的东西不一样, 所以取景也不一样 —— 定妆图上没留下的信息, 出场景图时
+# 模型只能自己编, 而它每次编得都不一样。
 SUBJECT_FRAMING = {
+    # 人: 脸和衣着是识别点, 要正面全身看全
     "character": "full body character reference, neutral standing pose, facing viewer, "
                  "plain flat background, clean game art",
-    # 道具用四分之三视角: 正投影看不出体积, 换个角度就没有可对齐的信息
+    # 动物: 体型比例和花纹分布是识别点, 四分之三站姿同时给出侧面轮廓和正面头部
+    "animal": "full body animal reference, standing in three-quarter view, head visible, "
+              "plain flat background, no scenery, clean game art",
+    # 物件: 几何是识别点, 且最容易漂 —— 正投影看不出体积, 换个角度就没有可对齐的信息
     "object": "single game asset reference, three-quarter view, centered, isolated, "
               "plain flat background, no scenery, clean game art",
 }

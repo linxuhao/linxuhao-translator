@@ -96,7 +96,8 @@ mcp = FastMCP(
         "  list_actors()\n"
         "  actor_tts(actor='郭靖', text='台词')  # 同一角色每句音色一致\n"
         "  create_character(name='郭靖', appearance='长相描述')  # 角色定妆, 返回定妆图 URL, 先看\n"
-        "  create_object(name='宝箱', appearance='外观描述')      # 道具定妆, 换角度也不变样\n"
+        "  create_animal(name='神雕', appearance='外观描述')      # 动物定妆\n"
+        "  create_object(name='宝箱', appearance='外观描述')      # 道具定妆; 务必写死几何(盖子平/拱, 边角方/圆)\n"
         "  list_subjects() / subject_image(subject='宝箱', scene='opened, from behind')\n"
         "  delete_actor(name) / delete_subject(name)  # 不可逆\n"
         "  remove_bg(image_url='...', mode?)  # 抠成真 RGBA (FLUX 画的棋盘格不是透明)\n"
@@ -620,41 +621,66 @@ async def generate_speech(text: str, voice: str = None, seed: int = None,
 @mcp.tool()
 async def create_character(name: str, appearance: str, width: int = 512, height: int = 512,
                            seed: int = None, force: bool = False) -> str:
-    """给一个角色定妆(生成并存下参考图), 之后 subject_image 出的每张图长相都一致。
+    """给一个人物定妆(生成并存下参考图), 之后 subject_image 出的每张图长相都一致。
 
     为什么要有这一步: generate_image 每次给的是"长得不一样的人"。同一个角色的头像 /
-    战斗立绘 / 地图小人, 直接用文字描述生成出来是三个人。定妆一次, 之后每张场景图都
-    带着参考图走图生图, 长相就和场景描述解耦了。(create_actor 钉音色, 这个钉长相。)
+    战斗立绘 / 地图小人, 直接用文字描述生成出来是三个人。
 
-    重要: 定完先看返回的定妆图, 确认是不是你要的那个人。定砸了会把整个角色锁死在错的
-    长相上, 之后每一张都错得很一致。不满意就 force=True 重定。
+    appearance 分两部分, 分清楚很重要:
 
-    参数:
-        name: 角色名(字母/数字/下划线/连字符/中文, 1~40 字)
-        appearance: 只写这个人长什么样(体型/脸/发型/衣着/配色), 不要写场景和动作
-        width/height: 定妆图尺寸, 上限 1024
-        seed / force: 同 create_actor
+    (1) 身份 —— 必须写死, 漏掉的每一项模型都会自己编, 而且每张编得不一样:
+      - 年龄段 + 体型(高瘦/魁梧/矮壮)
+      - 脸: 脸型、显著特征(疤/须/眉眼)
+      - 发型 + 发色 + 束发方式
+      - 辨识物: 跟着这个人走、换装也不摘的东西(独眼罩/佩剑/护腕/胎记)
 
-    返回: 定妆图 URL —— 先看再用
+    (2) 默认服装 —— 只是个基线, 不是身份的一部分。照样写进 appearance,
+        但 subject_image 的 scene 里写新衣服就能换掉(实测: 定妆穿布袍, scene 写
+        "wearing heavy red armor" 能换成甲胄而脸不变)。所以一个角色不需要按套装
+        定妆很多次。
+
+    不要写场景、动作、表情 —— 那些留给 subject_image 的 scene。
+
+    定完先看返回的定妆图确认是不是你要的人; 定砸了会把整个角色锁死在错的长相上,
+    不满意就 force=True 重定。
     """
-    return await _pin_subject(name, appearance, "character", width, height, seed, force, "角色")
+    return await _pin_subject(name, appearance, "character", width, height, seed, force, "人物")
+
+
+@mcp.tool()
+async def create_animal(name: str, appearance: str, width: int = 512, height: int = 512,
+                        seed: int = None, force: bool = False) -> str:
+    """给一只动物/坐骑/灵兽定妆, 之后每张图它都是同一只。
+
+    appearance 里必须写死这几样:
+      - 物种 + 体型比例(腿长/身长/头身比)
+      - 毛色/羽色 + 花纹的分布位置(不是只说"有斑点", 要说斑点在哪)
+      - 耳朵、尾巴、翅膀的形状
+      - 显著特征(独角/断尾/眼色)
+    鞍具、缰绳这类可穿卸的东西和人物的服装同理: 写进 appearance 只是默认值,
+    scene 里可以换掉。不要写场景和动作。
+
+    定完先看定妆图, 不满意 force=True 重定。
+    """
+    return await _pin_subject(name, appearance, "animal", width, height, seed, force, "动物")
 
 
 @mcp.tool()
 async def create_object(name: str, appearance: str, width: int = 512, height: int = 512,
                         seed: int = None, force: bool = False) -> str:
-    """给一件道具/物件定妆, 之后 subject_image 出的每张图它都长一个样。
+    """给一件道具/物件定妆, 之后每张图它都长一个样, 换角度也不变。
 
-    和 create_character 是同一套机制, 区别只在取景: 道具用四分之三视角(正投影看不出
-    体积, 换个角度就没有可对齐的信息)。一个宝箱在地图上、打开时、从背面看, 如果每次
-    都重新生成就是三个不同的箱子 —— 定妆一次就不会。
+    物件最容易漂的是**几何**, 不是材质配色 —— 实测一个宝箱, 材质配色五金件都对得上,
+    盖子却一会儿是平的方的、一会儿是拱的圆的, 因为原始描述里压根没写盖子什么形状。
 
-    参数:
-        name: 物件名
-        appearance: 只写它长什么样(材质/形状/配色/纹饰), 不要写场景和角度
-        width/height / seed / force: 同 create_character
+    appearance 里必须写死这几样:
+      - 整体轮廓 + 比例(长方/立方/圆桶, 宽高比)
+      - 关键几何: 盖子平的还是拱的、边角方的还是圆的、侧面直的还是弧的、有没有底座
+      - 材质 + 主次配色
+      - 五金件/纹饰及其位置(锁扣、包角、铆钉在哪)
+    不要写场景和角度 —— 角度留给 subject_image 的 scene。
 
-    返回: 定妆图 URL —— 先看再用
+    定完先看定妆图, 不满意 force=True 重定。
     """
     return await _pin_subject(name, appearance, "object", width, height, seed, force, "物件")
 
@@ -693,7 +719,9 @@ async def subject_image(subject: str, scene: str, width: int = 512, height: int 
     参数:
         subject: 名字(定妆时定的)
         scene: 这张图里它在干什么 / 在哪 / 什么角度 —— 只写场景动作视角,
-               外观由定妆图决定。例如 "opened, seen from behind, on a stone floor"
+               身份由定妆图决定。例如 "opened, seen from behind, on a stone floor"。
+               人物/动物还可以在这里换装: "wearing heavy red armor" 会换掉定妆图
+               里那身衣服而保住脸。
         width/height: 上限 1024
         seed: 随机种子(可选)
 
