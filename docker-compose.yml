@@ -88,7 +88,7 @@ services:
       vllm serve Qwen/Qwen3-ASR-0.6B
       --dtype float16
       --max-model-len 4096
-      --gpu-memory-utilization 0.30
+      --gpu-memory-utilization 0.25
       --max-num-seqs 32
       --served-model-name qwen3-asr
       --trust-remote-code
@@ -108,6 +108,9 @@ services:
       - VLLM_URL=http://vllm_qwen:8000/v1/chat/completions
       - SEARXNG_URL=http://linxuhaserver:8888/search
       - MEDIA_GEN_URL=http://media_gen:9010
+      # 工具返回的下载 URL 用这个前缀。不设的话会回落到上面的容器内主机名,
+      # 而调用方 (linxuhaserver 上的 AItelier) 解析不了 media_gen —— 实测 curl 返回 000。
+      - MEDIA_GEN_PUBLIC_URL=http://100.68.74.107:9010
     restart: unless-stopped
 
   # ==========================================

@@ -19,6 +19,7 @@
 #   ocr_pdf(pdf_base64?, pdf_file_id?, pdf_url?)
 #   web_search(query, categories?, language?, time_range?, max_results?)
 #   web_fetch(url, prompt?, max_length?, parse_media?)
+#   gen_sfx(preset, seed?, base_freq?, wave?, overrides?)
 # ==========================================
 import asyncio
 import io
@@ -81,7 +82,7 @@ mcp = FastMCP(
         "  - 内部是异步任务, 提交后阻塞等待完成 (最长 ~30 分钟), 返回生成文件的下载 URL。\n"
         "  - 生成的文件由 media-gen 服务提供下载 (URL 已含在返回结果里, 远程部署时 MEDIA_GEN_PUBLIC_URL 指向模型机的 Tailscale IP)。\n"
         "  - generate_image 支持图生图: 传 reference_image_file_id (先上传参考图) 或 reference_image_base64。\n"
-        "  - generate_music 支持 duration (音频秒数, 最长 47) 和 num_inference_steps。\n\n"
+        "  - generate_music 支持 duration (音频秒数, 最长 120) 和 num_inference_steps。\n  - generate_speech 是人声对白 (Qwen3-TTS VoiceDesign): voice 传一段声音描述, 不需要参考音频。\n\n"
         "MCP 工具:\n"
         "  transcribe_audio(audio_file_id='...')\n"
         "  ocr_image(image_file_id='...')\n"
@@ -90,6 +91,11 @@ mcp = FastMCP(
         "  web_fetch(url='...', prompt='...', max_length=8000, parse_media=False)\n"
         "  generate_image(prompt='...', width?, height?, seed?, reference_image_file_id?)\n"
         "  generate_music(prompt='...', seed?, duration?, num_inference_steps?)\n"
+        "  generate_speech(text='...', voice='一段声音描述', seed?, speaking_rate?)  # 游戏 NPC 对白\n"
+        "  remove_bg(image_url='...', mode?)  # 抠成真 RGBA (FLUX 画的棋盘格不是透明)\n"
+        "  slice_sheet(image_url='...', rows=2, cols=2, trim?)  # 网格 sprite sheet 切单帧\n"
+        "  vision_critique(prompt='...', image_url='...')  # 自定义提问的看图点评\n"
+        "  gen_sfx(preset='jump', seed?)  # 程序化游戏音效 (sfxr 风格, 不用扩散模型)\n"
     ),
 )
 
@@ -530,8 +536,8 @@ async def generate_image(prompt: str, width: int = 1024, height: int = 1024, see
 
     参数:
         prompt: 图片描述 (英文效果最佳)
-        width: 宽度 (上限 768, 超出会被 clamp)
-        height: 高度 (上限 768, 超出会被 clamp)
+        width: 宽度 (上限 1024, 超出会被 clamp)
+        height: 高度 (上限 1024, 超出会被 clamp)
         seed: 随机种子 (可选, 固定后结果可复现)
         reference_image_file_id: 参考图 file_id (先 POST /upload/image 上传获得), 用于图生图
         reference_image_base64: 参考图 base64 (可选, 与 file_id 二选一)
@@ -556,7 +562,7 @@ async def generate_music(prompt: str, seed: int = None, duration: float = 30.0, 
     参数:
         prompt: 音乐描述 (风格/乐器/情绪, 英文效果最佳)
         seed: 随机种子 (可选, 固定后结果可复现)
-        duration: 音频时长秒数 (最长 47 秒, 默认 30)
+        duration: 音频时长秒数 (最长 120 秒, 默认 30)
         num_inference_steps: 推理步数 (默认 100, 越多质量越好越慢)
 
     返回: 生成文件的下载 URL (用 MCP 服务器 base URL + 该路径获取)
@@ -566,6 +572,193 @@ async def generate_music(prompt: str, seed: int = None, duration: float = 30.0, 
     if not result["ok"]:
         return f"音乐生成失败: {result['error']}"
     return f"音乐已生成: {MEDIA_GEN_PUBLIC_URL}{result['file_url']} (时长 {duration}s)"
+
+
+@mcp.tool()
+async def generate_speech(text: str, voice: str = None, seed: int = None,
+                          speaking_rate: float = None) -> str:
+    """用 Qwen3-TTS VoiceDesign 合成人声对白, 保存为 WAV 并返回下载 URL。
+
+    做游戏 NPC 对白用这个。它不是克隆某个真人的嗓子 —— 虚构角色没有录音 ——
+    而是从一段"这个人听起来是什么样"的描述直接设计出声音, 所以 voice 参数
+    写得越具体, 角色越像本人。同一段 voice 描述 + 同一个 seed 可复现,
+    整部游戏里同一个 NPC 用同一组参数就能保持音色一致。
+
+    参数:
+        text: 要念的台词 (中/英/日/韩/德/法/俄/葡/西/意, 上限 600 字, 超出截断)
+        voice: 声音的自然语言描述, 英文效果最佳。写年龄/性别/音色/语速/情绪,
+               例如 "An elderly Chinese martial arts master, hoarse low voice,
+               slow and deliberate" 或 "A cheerful young woman, bright and fast".
+               不传则用中性旁白嗓。
+        seed: 随机种子 (可选, 固定后结果可复现)
+        speaking_rate: 语速倍率 (可选, 1.0 为原速)
+
+    返回: 生成文件的下载 URL (24 kHz 单声道 WAV)
+    """
+    payload = {"type": "speech", "prompt": text, "instruct": voice, "seed": seed,
+               "speaking_rate": speaking_rate}
+    result = await _submit_and_poll(payload)
+    if not result["ok"]:
+        return f"语音生成失败: {result['error']}"
+    return f"语音已生成: {MEDIA_GEN_PUBLIC_URL}{result['file_url']}"
+
+
+async def _resolve_image_b64(image_base64, image_file_id, image_url):
+    """把三种图片入参统一成 base64 (转发给 media-gen 用)。返回 (b64, 错误信息)。"""
+    if image_file_id and image_file_id in file_storage:
+        return base64.b64encode(file_storage[image_file_id]).decode(), None
+    if image_url:
+        if is_file_url(image_url):
+            return None, "错误: image_url 不能是本地文件路径，请使用 image_file_id 上传文件"
+        return base64.b64encode(await download_url(image_url)).decode(), None
+    if image_base64:
+        return image_base64, None
+    return None, "错误: 必须提供 image_base64、image_file_id 或 image_url"
+
+
+@mcp.tool()
+async def remove_bg(image_base64: str = None, image_file_id: str = None, image_url: str = None,
+                    mode: str = "auto", quality: str = "best") -> str:
+    """抠掉图片背景, 输出真正带 alpha 通道的 RGBA PNG, 返回下载 URL。
+
+    FLUX 生成不出 alpha: 你让它画"透明背景", 它是把 PS 那种灰白棋盘格当成不透明
+    像素画出来的。做游戏精灵图必须用本工具把它转成真的 RGBA。
+
+    参数:
+        image_base64: base64 编码的图片
+        image_file_id: 通过 POST /upload/image 上传后获得的 file_id
+        image_url: 图片的 URL (必须是可访问的公开 URL, generate_image 返回的 URL 可直接用)
+        mode: auto (默认, 按结构证据判断是不是棋盘格: 恰好两级灰度 + 周期方格; 不是就走
+              通用抠图) / checker (强制只抠棋盘格) / rembg (强制通用显著物体抠图, CPU)
+        quality: best (默认, birefnet-general-lite, ~6s, 边缘干净) / fast (u2netp, ~0.2s,
+                 边缘会留一圈灰雾)。只影响 rembg 分支。
+
+    优先使用 image_file_id (最高效)，其次 image_url，直传 base64 最后。
+
+    返回: RGBA PNG 的下载 URL, 附带实际走的分支与透明像素占比。抠出来明显不对
+    (几乎全透明 / 几乎没抠掉 / 碎成一堆小块) 时会附一行 ⚠️ 警告 —— 那种结果别直接用。
+    """
+    img_b64, err = await _resolve_image_b64(image_base64, image_file_id, image_url)
+    if err:
+        return err
+    async with httpx.AsyncClient(timeout=MEDIA_GEN_TIMEOUT) as client:
+        r = await client.post(f"{MEDIA_GEN_URL}/v1/remove_bg",
+                              json={"image": img_b64, "mode": mode, "quality": quality})
+    if r.status_code != 200:
+        return f"抠图失败: {r.text[:300]}"
+    data = r.json()
+    branch = data.get("mode_used", mode)
+    model = f"/{data['model']}" if data.get("model") else ""
+    out = (f"背景已移除: {MEDIA_GEN_PUBLIC_URL}{data['file_url']} "
+           f"(分支 {branch}{model}, 透明像素占比 {data['transparent_ratio']:.1%})")
+    if data.get("warning"):
+        out += f"\n⚠️ {data['warning']}"
+    return out
+
+
+@mcp.tool()
+async def slice_sheet(image_base64: str = None, image_file_id: str = None, image_url: str = None,
+                      rows: int = None, cols: int = None, frame_width: int = None,
+                      frame_height: int = None, trim: bool = True) -> str:
+    """把排成网格的 sprite sheet 切成单帧 PNG, 返回每一帧的下载 URL。
+
+    让 FLUX 画"4 帧动画"时它会摆成 2x2 网格而不是 4 张图, 用本工具切开。
+
+    参数:
+        image_base64 / image_file_id / image_url: 同其它图片工具
+        rows, cols: 网格行列数 (二者都给)
+        frame_width, frame_height: 单帧像素尺寸 (与 rows+cols 二选一)
+        trim: 是否把每帧裁到非透明/非背景的外接框 (默认 True)
+
+    返回: 各帧 PNG 的下载 URL
+    """
+    img_b64, err = await _resolve_image_b64(image_base64, image_file_id, image_url)
+    if err:
+        return err
+    payload = {"image": img_b64, "rows": rows, "cols": cols,
+               "frame_width": frame_width, "frame_height": frame_height, "trim": trim}
+    async with httpx.AsyncClient(timeout=MEDIA_GEN_TIMEOUT) as client:
+        r = await client.post(f"{MEDIA_GEN_URL}/v1/slice_sheet", json=payload)
+    if r.status_code != 200:
+        return f"切图失败: {r.text[:300]}"
+    urls = [f"{MEDIA_GEN_PUBLIC_URL}{u}" for u in r.json()["file_urls"]]
+    return f"已切出 {len(urls)} 帧:\n" + "\n".join(urls)
+
+
+@mcp.tool()
+async def vision_critique(prompt: str, image_base64: str = None, image_file_id: str = None,
+                          image_url: str = None, max_tokens: int = 2048) -> str:
+    """用 Qwen3.6-27B 按你给的问题看图并作答 (画面点评/美术审查/构图判断)。
+
+    与 ocr_image 的区别: ocr_image 的指令写死成"抄写并校正文字", 本工具由调用方
+    自己出题, 适合把游戏截帧丢进来问"主体够不够醒目 / 对比度够不够 / UI 有没有挡住画面"。
+
+    参数:
+        prompt: 你要模型回答的问题 (英文效果最佳)
+        image_base64: base64 编码的图片
+        image_file_id: 通过 POST /upload/image 上传后获得的 file_id
+        image_url: 图片的 URL (必须是可访问的公开 URL)
+        max_tokens: 回答长度上限 (默认 2048)
+
+    优先使用 image_file_id (最高效)，其次 image_url，直传 base64 最后。
+
+    单图工具 (vLLM 上下文 12288)。要点评多帧就多调几次, 自己汇总。
+    """
+    if image_file_id and image_file_id in file_storage:
+        img = Image.open(io.BytesIO(file_storage[image_file_id]))
+    elif image_url:
+        if is_file_url(image_url):
+            return "错误: image_url 不能是本地文件路径，请使用 image_file_id 上传文件"
+        img = Image.open(io.BytesIO(await download_url(image_url)))
+    elif image_base64:
+        img = Image.open(io.BytesIO(base64.b64decode(image_base64)))
+    else:
+        return "错误: 必须提供 image_base64、image_file_id 或 image_url"
+
+    img_b64 = image_to_jpeg_base64(resize_image(img))
+    content = [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+        {"type": "text", "text": prompt},
+    ]
+    return await call_vllm(content, max_tokens=max_tokens)
+
+
+@mcp.tool()
+async def gen_sfx(preset: str = "select", seed: int = None, base_freq: float = None,
+                  wave: str = None, overrides: dict = None) -> str:
+    """合成一枚 sfxr/jsfxr 风格的游戏音效 (纯程序化, 不用模型), 返回 WAV 下载 URL。
+
+    不要用 generate_music 做音效: 那是 Stable Audio 扩散模型, 出来的是几十秒的宽带
+    糊音。游戏音效是 10~200ms 的瞬态, 要精确、即时、可复现 —— 本工具毫秒级出结果,
+    同一个 seed 逐字节可复现。
+
+    参数:
+        preset: jump / coin / hit / explosion / powerup / laser / select / hurt
+        seed: 随机种子。给了就在 preset 周围抖动参数 (不是抖采样点), 同 seed 结果完全相同;
+              不给则严格使用 preset 的原始参数。
+        base_freq: 覆盖基频 Hz (noise 波形下是采样保持的刷新率)
+        wave: 覆盖波形 square / saw / sine / triangle / noise
+        overrides: 覆盖任意合成参数的字典, 例如
+                   {"freq_slide": -3.0, "release": 0.4, "lpf": 0.5, "duty": 0.25,
+                    "vibrato_depth": 0.5, "arp_mult": 1.5, "arp_time": 0.06}
+                   完整字段见 media-gen 的 GET /v1/sfx_presets
+
+    返回: 44.1kHz 16bit 单声道 WAV 的下载 URL
+    """
+    ov = dict(overrides or {})
+    if base_freq is not None:
+        ov["base_freq"] = base_freq
+    if wave is not None:
+        ov["wave"] = wave
+    payload = {"preset": preset, "seed": seed, "overrides": ov or None}
+    async with httpx.AsyncClient(timeout=MEDIA_GEN_TIMEOUT) as client:
+        r = await client.post(f"{MEDIA_GEN_URL}/v1/gen_sfx", json=payload)
+    if r.status_code != 200:
+        return f"音效合成失败: {r.text[:300]}"
+    data = r.json()
+    return (f"音效已生成: {MEDIA_GEN_PUBLIC_URL}{data['file_url']} "
+            f"(preset {data['preset']}, seed {data['seed']}, 时长 {data['duration']:.3f}s, "
+            f"波形 {data['params']['wave']}, 基频 {data['params']['base_freq']:.0f}Hz)")
 
 
 def _abs_url(base_url: str, href: str) -> str:
@@ -710,6 +903,10 @@ if __name__ == "__main__":
     print("  web_fetch(url=..., max_length=?)")
     print("  generate_image(prompt=..., width?, height?, seed?)")
     print("  generate_music(prompt=..., seed?)")
+    print("  remove_bg(image_base64?, image_file_id?, image_url?, mode?, quality?)")
+    print("  slice_sheet(image_base64?, image_file_id?, image_url?, rows?, cols?, frame_width?, frame_height?, trim?)")
+    print("  vision_critique(prompt=..., image_base64?, image_file_id?, image_url?, max_tokens?)")
+    print("  gen_sfx(preset=..., seed?, base_freq?, wave?, overrides?)")
     print("=" * 60)
 
     uvicorn.run(mcp.http_app(), host="0.0.0.0", port=9003)

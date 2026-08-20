@@ -27,17 +27,18 @@ import urllib.error
 import threading
 import logging
 import wave
+from dataclasses import dataclass, asdict
 
 import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
-from PIL import Image
+from PIL import Image, ImageDraw
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("media-gen")
 
-app = FastAPI(title="media-gen", version="0.3.0")
+app = FastAPI(title="media-gen", version="0.4.0")
 
 # ---- 配置 ----
 GENERATED_DIR = os.getenv("GENERATED_DIR", "/generated")
@@ -55,6 +56,12 @@ JOB_TIMEOUT_S = float(os.getenv("JOB_TIMEOUT_S", "900"))
 SD_SERVER = os.getenv("SD_SERVER", "http://sd_server:9020")
 AUDIO_SERVER = os.getenv("AUDIO_SERVER", "http://audiocpp_server:9021")
 AUDIO_MODEL_ID = os.getenv("AUDIO_MODEL_ID", "stable-audio")
+SPEECH_MODEL_ID = os.getenv("SPEECH_MODEL_ID", "qwen3-tts")
+# Qwen3-TTS VoiceDesign: 声音由一段自然语言描述决定, 不需要参考音频 ——
+# 虚构角色本来就没有真人录音, 但一定有人设描述。
+DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "A neutral adult narrator, clear and natural")
+# 文本长度上限: 引擎会把长文本切段生成, 不设限就可能一个请求跑十几分钟
+MAX_SPEECH_CHARS = int(os.getenv("MAX_SPEECH_CHARS", "600"))
 # 引擎冷启动的等待上限 (宿主机重启后要从磁盘重读 12.6 GB 权重)
 ENGINE_WAIT_S = float(os.getenv("ENGINE_WAIT_S", "180"))
 # 生成产物保留天数; 0 表示不清理
@@ -165,8 +172,35 @@ def _run_image(job):
     with open(out, "wb") as f:
         f.write(base64.b64decode(imgs[0]["b64_json"]))
     log.info("[sd_server] ok in %.1fs", time.time() - t)
+    _fit_size(out, job.get("want_width", job["width"]), job.get("want_height", job["height"]))
     _check_image(out)
     return name
+
+
+def _fit_size(path, want_w, want_h):
+    """Make the file the size that was ASKED for, not the one the model felt like.
+
+    The engine snaps a request onto its own latent grid (and to a minimum edge),
+    so a 40x32 sprite comes back as 256x256. Callers that need an exact canvas —
+    a game asset pipeline validating sprite dimensions — then reject every image
+    and ship nothing, which is exactly what happened. width/height are documented
+    as the output size, so honour them here instead of leaking the grid.
+
+    LANCZOS going down (almost always the case: the grid minimum is far above a
+    sprite), NEAREST going up so an upscaled pixel sprite keeps hard edges."""
+    try:
+        img = Image.open(path)
+        if (img.width, img.height) == (want_w, want_h):
+            return
+        shrinking = want_w * want_h < img.width * img.height
+        img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB").resize(
+            (want_w, want_h),
+            Image.LANCZOS if shrinking else Image.NEAREST,
+        ).save(path)
+        log.info("[sd_server] resized %dx%d -> %dx%d", img.width, img.height, want_w, want_h)
+    except Exception:
+        log.warning("resize to %dx%d failed; keeping engine canvas", want_w, want_h,
+                    exc_info=True)
 
 
 def _run_music(job):
@@ -194,13 +228,42 @@ def _run_music(job):
     return name
 
 
+def _run_speech(job):
+    t = time.time()
+    req = {
+        "task_route": "vdes",
+        "text": job["prompt"],
+        "instruct": job.get("instruct") or DEFAULT_VOICE,
+    }
+    if job.get("seed") is not None:
+        req["seed"] = job["seed"]
+    if job.get("speaking_rate"):
+        req["speaking_rate"] = job["speaking_rate"]
+    res = _post(f"{AUDIO_SERVER}/v1/tasks/run",
+                {"model": SPEECH_MODEL_ID, "request": req}, "audiocpp_server")
+    b64 = res.get("audio")
+    if not b64:
+        raise RuntimeError(f"audiocpp_server returned no audio: {str(res)[:300]}")
+    name = _new_name("speech", "wav")
+    out = os.path.join(GENERATED_DIR, name)
+    with open(out, "wb") as f:
+        f.write(base64.b64decode(b64))
+    tm = res.get("timing") or {}
+    log.info("[audiocpp_server] speech ok in %.1fs (rtf=%s)", time.time() - t, tm.get("rtf"))
+    _check_audio(out)
+    return name
+
+
+_RUNNERS = {"image": _run_image, "music": _run_music, "speech": _run_speech}
+
+
 def _worker():
     while True:
         job_id, job = _job_queue.get()
         with _job_lock:
             _jobs[job_id]["status"] = "running"
         try:
-            name = _run_image(job) if job["type"] == "image" else _run_music(job)
+            name = _RUNNERS[job["type"]](job)
             with _job_lock:
                 _jobs[job_id].update(status="done", file=name)
         except Exception as e:
@@ -239,8 +302,10 @@ threading.Thread(target=_worker, daemon=True).start()
 
 # ---- 请求体 ----
 class JobRequest(BaseModel):
-    type: str = Field(..., description="image 或 music")
-    prompt: str
+    type: str = Field(..., description="image / music / speech")
+    prompt: str                       # speech 时是要念的文本
+    instruct: str | None = None       # speech: 声音的自然语言描述
+    speaking_rate: float | None = None
     width: int = 512
     height: int = 512
     num_inference_steps: int | None = None
@@ -253,15 +318,29 @@ class JobRequest(BaseModel):
 # ---- 端点 ----
 @app.post("/v1/jobs")
 async def submit_job(req: JobRequest):
-    if req.type not in ("image", "music"):
-        return JSONResponse({"error": "type 必须是 image 或 music"}, status_code=400)
+    if req.type not in _RUNNERS:
+        return JSONResponse({"error": f"type 必须是 {'/'.join(_RUNNERS)}"}, status_code=400)
     job = req.model_dump()
     clamped = None
     if req.type == "image":
-        job["width"] = max(256, min(req.width, MAX_IMAGE_SIZE))
-        job["height"] = max(256, min(req.height, MAX_IMAGE_SIZE))
-        if (job["width"], job["height"]) != (req.width, req.height):
-            clamped = {"width": job["width"], "height": job["height"]}
+        # Two different sizes, and conflating them is what made every sprite the
+        # wrong shape: `want_*` is what the CALLER gets (only the upper bound
+        # applies — _fit_size resizes the result at the end), while `width`/
+        # `height` are what the ENGINE is asked to render, which has a 256px
+        # floor. Only the upper clamp is worth reporting; the floor is internal.
+        job["want_width"] = min(req.width, MAX_IMAGE_SIZE)
+        job["want_height"] = min(req.height, MAX_IMAGE_SIZE)
+        job["width"] = max(256, job["want_width"])
+        job["height"] = max(256, job["want_height"])
+        if (job["want_width"], job["want_height"]) != (req.width, req.height):
+            clamped = {"width": job["want_width"], "height": job["want_height"]}
+    elif req.type == "speech":
+        text = req.prompt.strip()
+        if not text:
+            return JSONResponse({"error": "speech 的 prompt 不能为空"}, status_code=400)
+        job["prompt"] = text[:MAX_SPEECH_CHARS]
+        if len(text) > MAX_SPEECH_CHARS:
+            clamped = {"prompt_chars": MAX_SPEECH_CHARS}
     else:
         job["audio_end_in_s"] = max(1.0, min(float(req.audio_end_in_s), MAX_AUDIO_SECONDS))
         if job["audio_end_in_s"] != req.audio_end_in_s:
@@ -299,6 +378,525 @@ async def serve_file(filename: str):
     if not os.path.exists(path):
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(path)
+
+
+# ---- 图像后处理 (纯 CPU, 同步执行) ----
+# 不走上面的 job 队列: 那个队列是单 worker 串行的, 为的是让两个 ggml 引擎不争显存;
+# 抠图/切图既不碰 GPU 也只要几百毫秒, 排在一次 15s 生图后面纯属浪费。
+# 路由用 def 而不是 async def, Starlette 会把它丢进线程池, 不阻塞事件循环。
+
+# rembg 模型: 默认换成 birefnet-general-lite。同机实测 (512x512, 容器内热推理):
+#   u2netp            0.16s  软边最多, 猫尾巴留一圈灰雾
+#   isnet-general-use 1.38s  尾巴仍有轻雾
+#   birefnet-general-lite 5.89s  干净  <- 默认
+#   bria-rmbg        10.85s  同样干净, 但翻倍的耗时只换来边缘的一点点提升
+# 慢 6s 换一张能直接用的图是划算的; 要快就传 quality="fast"。
+REMBG_MODELS = {"best": "birefnet-general-lite", "fast": "u2netp"}
+_rembg_sessions = {}          # 每个模型一个常驻 session (onnxruntime 初始化很贵)
+
+# 棋盘格判定阈值 (见 _looks_like_checkerboard)
+CHECKER_MIN_CAND = float(os.getenv("CHECKER_MIN_CAND", "0.05"))
+CHECKER_MIN_GAP = float(os.getenv("CHECKER_MIN_GAP", "15"))
+CHECKER_MAX_VALLEY = float(os.getenv("CHECKER_MAX_VALLEY", "0.30"))
+CHECKER_MIN_RUNS = float(os.getenv("CHECKER_MIN_RUNS", "0.60"))
+
+# alpha 退化判定 (见 _alpha_warning)
+ALPHA_MAX_TRANSPARENT = float(os.getenv("ALPHA_MAX_TRANSPARENT", "0.95"))
+ALPHA_MIN_TRANSPARENT = float(os.getenv("ALPHA_MIN_TRANSPARENT", "0.02"))
+ALPHA_MIN_BLOB = float(os.getenv("ALPHA_MIN_BLOB", "0.02"))
+ALPHA_MAX_HOLES = float(os.getenv("ALPHA_MAX_HOLES", "0.05"))
+ALPHA_MAX_BG_DETAIL = float(os.getenv("ALPHA_MAX_BG_DETAIL", "0.5"))
+
+
+def _checker_candidates(a, bright=195, neutral=20):
+    """又亮又接近中性灰的像素 —— 棋盘格的必要条件, 但远不是充分条件。"""
+    return (a.min(2) >= bright) & ((a.max(2) - a.min(2)) <= neutral)
+
+
+def _key_checkerboard(img, bright=195, neutral=20):
+    """把 FLUX 画出来的"透明棋盘格"抠掉, 返回 alpha 数组。
+
+    FLUX.2 Klein 不会输出 alpha 通道: 你要"透明背景", 它就把 PS 那种灰白格子当成
+    不透明像素画出来。这些格子的特征是又亮又接近中性灰 (实测 255 与 220 两种方块)。
+    只按颜色判定会连鸟肚子上的白色一起抠掉, 所以再加一条: 必须与画面边缘连通。
+    """
+    a = np.asarray(img.convert("RGB")).astype(np.int16)
+    cand = _checker_candidates(a, bright, neutral)
+    # Image.fromarray 返回的是只读 buffer, floodfill 的写入会被静默丢弃, 必须 copy()
+    m = Image.fromarray(np.where(cand, 255, 0).astype(np.uint8)).copy()
+    w, h = img.size
+    for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+        if m.getpixel(xy) == 255:
+            ImageDraw.floodfill(m, xy, 128, thresh=0)
+    return np.where(np.array(m) == 128, 0, 255).astype(np.uint8)
+
+
+def _two_tone(grey, cand):
+    """候选区的灰度是不是"两级"。返回 (峰1, 峰2, 谷/峰)。
+
+    真棋盘格实测并不是干净的两个值 (FLUX 画出来带噪): 255/254 一簇, 219~224 一簇。
+    所以用平滑直方图找两个峰, 再看两峰之间的谷有多深 —— 连续渐变的摄影背景填满谷,
+    两级方格则谷接近 0。
+    """
+    hist = np.bincount(grey[cand], minlength=256).astype(np.float64)
+    sm = np.convolve(hist, np.ones(5) / 5.0, mode="same")
+    total = sm.sum()
+    if total <= 0:
+        return 0, 0, 1.0
+    sm /= total
+    p1 = int(np.argmax(sm))
+    far = np.ones(256, dtype=bool)
+    far[max(0, p1 - 10):p1 + 11] = False          # 第二个峰必须离第一个足够远
+    p2 = int(np.argmax(np.where(far, sm, -1.0)))
+    lo, hi = sorted((p1, p2))
+    peak = float(min(sm[p1], sm[p2]))
+    valley = float(sm[lo + 1:hi].min()) if hi - lo > 1 else peak
+    return p1, p2, (valley / peak if peak > 0 else 1.0)
+
+
+def _tone_runs(tone, cand):
+    """沿行统计交替方块的游程长度。
+
+    只看候选像素占多数的行, 并丢掉每段两端不完整的游程 —— 半个方块会污染中位数。
+    """
+    out = []
+    for r in range(tone.shape[0]):
+        row = cand[r]
+        if row.mean() < 0.5:
+            continue
+        idx = np.flatnonzero(row)
+        if idx.size < 32:
+            continue
+        for span in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
+            if span.size < 32:
+                continue
+            t = tone[r, span]
+            bounds = np.concatenate(([0], np.flatnonzero(np.diff(t)) + 1, [t.size]))
+            rl = np.diff(bounds)
+            if rl.size > 2:
+                out.extend(rl[1:-1].tolist())
+    return np.asarray(out, dtype=np.float64)
+
+
+def _looks_like_checkerboard(img, bright=195, neutral=20):
+    """这张图的亮中性区域到底是不是 FLUX 的"假透明"棋盘格。返回 (bool, 证据)。
+
+    旧实现按"抠掉了多少"来判 (yield): 先抠一遍, 抠掉 >5% 就认为是棋盘格。那是错的 ——
+    任何明亮中性的摄影背景都满足候选条件。实测白猫 + 浅灰影棚背景被判成 checker (0.662),
+    floodfill 从边缘连通进猫身体, 把猫身上和头上啃出大洞。
+
+    改判结构证据: 棋盘格是恰好两级灰度 (实测 253 与 221) 铺成的固定边长方块。
+    两个条件都成立才算; 否则一律走 rembg。
+    """
+    a = np.asarray(img.convert("RGB")).astype(np.int16)
+    cand = _checker_candidates(a, bright, neutral)
+    ev = {"cand_ratio": round(float(cand.mean()), 4)}
+    if cand.mean() < CHECKER_MIN_CAND:
+        return False, dict(ev, reason="亮中性区域太小, 没有假透明背景")
+    grey = a.mean(2).astype(np.uint8)
+    p1, p2, valley = _two_tone(grey, cand)
+    ev.update(tones=[p1, p2], tone_gap=abs(p1 - p2), valley_ratio=round(valley, 3))
+    if abs(p1 - p2) < CHECKER_MIN_GAP or valley > CHECKER_MAX_VALLEY:
+        return False, dict(ev, reason="灰度是连续渐变而非两级, 像摄影背景")
+    tone = grey >= (p1 + p2) / 2.0
+    rows, cols = _tone_runs(tone, cand), _tone_runs(tone.T, cand.T)
+    if rows.size < 16 or cols.size < 16:
+        return False, dict(ev, reason="没有成片的候选区可判周期")
+    cell_r, cell_c = float(np.median(rows)), float(np.median(cols))
+    cons_r = float((np.abs(rows - cell_r) <= max(1.0, 0.25 * cell_r)).mean())
+    cons_c = float((np.abs(cols - cell_c) <= max(1.0, 0.25 * cell_c)).mean())
+    ev.update(cell=[round(cell_r, 1), round(cell_c, 1)],
+              run_consistency=[round(cons_r, 3), round(cons_c, 3)])
+    if cons_r < CHECKER_MIN_RUNS or cons_c < CHECKER_MIN_RUNS:
+        return False, dict(ev, reason="方块边长不规则, 不是周期网格")
+    if not (3 <= cell_r <= 128 and 3 <= cell_c <= 128):
+        return False, dict(ev, reason="方块尺寸不合理")
+    if abs(cell_r - cell_c) > 0.25 * max(cell_r, cell_c):
+        return False, dict(ev, reason="方块不是正方形")
+    return True, dict(ev, reason="两级灰度 + 周期方格 = FLUX 假透明")
+
+
+def _rembg_alpha(img, quality="best"):
+    """通用显著物体抠图。放 CPU (onnxruntime) —— GPU 留给两个 ggml 引擎。"""
+    import onnxruntime as ort
+    from rembg import new_session, remove
+    model = REMBG_MODELS.get(quality, REMBG_MODELS["best"])
+    sess = _rembg_sessions.get(model)
+    if sess is None:
+        log.info("rembg: 首次加载 %s", model)
+        # onnxruntime 的 CPU memory arena 把推理峰值变成常驻内存, 且永不归还:
+        # 实测 1024x1024 两次调用后 RSS 0.06 -> 7.5 -> 12.1 GB 封顶不动
+        # (30 GB 的机器凭空少掉 40% 内存, available 只剩 2 GB)。
+        # 关掉 arena 后常驻 0.69 GB, alpha 输出逐位相同 —— 纯粹是分配器行为。
+        so = ort.SessionOptions()
+        so.enable_cpu_mem_arena = False
+        sess = _rembg_sessions[model] = new_session(model, sess_opts=so)
+    return model, np.array(remove(img.convert("RGB"), session=sess))[:, :, 3]
+
+def _largest_blob_ratio(mask, max_side=192):
+    """最大不透明连通块占整图的比例。
+
+    缩到 <=192px 再做标签传播 (取 4 邻域最大值直到不动): 这个数只用来判"抠出来的东西
+    碎成了渣", 不需要像素级精度, 而全分辨率的纯 python 连通域太慢。
+    """
+    h, w = mask.shape
+    s = max_side / max(h, w)
+    if s < 1.0:
+        m = np.asarray(Image.fromarray(mask.astype(np.uint8) * 255).resize(
+            (max(1, int(w * s)), max(1, int(h * s))), Image.NEAREST)) > 127
+    else:
+        m = mask
+    if not m.any():
+        return 0.0
+    lab = np.where(m, np.arange(1, m.size + 1).reshape(m.shape), 0)
+    for _ in range(4 * max(m.shape)):
+        nb = lab.copy()
+        nb[1:] = np.maximum(nb[1:], lab[:-1])
+        nb[:-1] = np.maximum(nb[:-1], lab[1:])
+        nb[:, 1:] = np.maximum(nb[:, 1:], lab[:, :-1])
+        nb[:, :-1] = np.maximum(nb[:, :-1], lab[:, 1:])
+        nb = np.where(m, nb, 0)
+        if np.array_equal(nb, lab):
+            break
+        lab = nb
+    counts = np.bincount(lab.ravel())
+    counts[0] = 0
+    return float(counts.max() / m.size)
+
+
+def _hole_ratio(alpha):
+    """主体轮廓内部被抠出来的洞, 占不透明面积的比例。
+
+    白猫那次翻车不是比例算错 —— 0.662 对那张图完全是个合理的数字; 真正错的是
+    猫身上和头上被啃出了洞。洞是"透明、但从画面边缘走不到"的像素, 用 _key_checkerboard
+    已经在用的 floodfill 就能数出来 (外面先套一圈透明, 让所有贴边的透明区连成一片,
+    一次 floodfill 就够), 不必为此引入 scipy。
+    """
+    opaque = alpha > 0
+    n = int(opaque.sum())
+    if n == 0:
+        return 0.0
+    h, w = opaque.shape
+    pad = np.zeros((h + 2, w + 2), dtype=np.uint8)
+    pad[1:-1, 1:-1] = np.where(opaque, 255, 0)
+    m = Image.fromarray(pad).copy()          # fromarray 的 buffer 只读, 必须 copy
+    ImageDraw.floodfill(m, (0, 0), 128, thresh=0)
+    return float((np.asarray(m)[1:-1, 1:-1] == 0).sum() / n)
+
+
+def _bg_detail_ratio(img, alpha):
+    """被抠掉的那片区域, 细节密度相对于留下来的主体有多高。
+
+    合格的抠图, 去掉的是背景: 影棚灰、白桌面、绿幕、棋盘格, 都很平。当"背景"和主体
+    一样满是边缘时 (集市那张: 0.90), 说明模型只是从一整幅场景里随手挑了几个人留下,
+    这种结果多半不是调用方想要的。返回 (相对比值, 去掉区域的平均梯度)。
+    """
+    g = np.asarray(img.convert("L"), dtype=np.float32)
+    gx, gy = np.abs(np.diff(g, axis=1)), np.abs(np.diff(g, axis=0))
+    def mean_in(mask):
+        mx, my = mask[:, :-1] & mask[:, 1:], mask[:-1] & mask[1:]
+        v = np.concatenate([gx[mx], gy[my]])
+        return float(v.mean()) if v.size else 0.0
+    removed, kept = mean_in(alpha == 0), mean_in(alpha > 127)
+    return (removed / kept if kept > 1.0 else 0.0), removed
+
+
+def _alpha_report(img, alpha, extra=()):
+    """算出抠图质量指标, 并在明显不对时给一句话警告 (不失败, 只是别再默默报成功)。"""
+    tr = float((alpha == 0).mean())
+    solid = float((alpha > 127).mean())
+    holes = _hole_ratio(alpha)
+    blob = _largest_blob_ratio(alpha > 127)
+    detail, removed_grad = _bg_detail_ratio(img, alpha)
+    m = {"transparent_ratio": round(tr, 4), "solid_ratio": round(solid, 4),
+         "hole_ratio": round(holes, 4), "largest_blob_ratio": round(blob, 4),
+         "bg_detail_ratio": round(detail, 3)}
+    w = list(extra)
+    if tr > ALPHA_MAX_TRANSPARENT:
+        w.append(f"{tr:.1%} 的像素被抠成了透明, 主体几乎整个没了")
+    if tr < ALPHA_MIN_TRANSPARENT:
+        w.append(f"只抠掉了 {tr:.1%}, 基本什么都没去掉")
+    if blob < ALPHA_MIN_BLOB:
+        w.append(f"最大的不透明连通块只占整图 {blob:.1%}, 抠出来的是碎片不是主体")
+    if holes > ALPHA_MAX_HOLES:
+        w.append(f"主体轮廓内部有 {holes:.1%} 的面积被挖成了洞 (相对不透明面积), "
+                 f"多半是背景色和主体撞色被啃穿了")
+    if detail > ALPHA_MAX_BG_DETAIL and removed_grad > 5.0:
+        w.append(f"被去掉的区域细节密度是主体的 {detail:.0%}, 那不是背景而是画面的一部分, "
+                 f"这张图没有明确的前景主体")
+    return m, ("抠图结果很可能不对: " + "; ".join(w) if w else None)
+
+
+def _trim(frame):
+    """裁到非透明/非棋盘格的外接框。"""
+    if frame.mode == "RGBA":
+        box = frame.getchannel("A").getbbox()
+    else:
+        box = Image.fromarray(_key_checkerboard(frame)).getbbox()
+    return frame.crop(box) if box else frame
+
+
+class RemoveBgRequest(BaseModel):
+    image: str                      # base64 原图
+    mode: str = "auto"              # auto / checker / rembg
+    quality: str = "best"           # best = birefnet-general-lite / fast = u2netp
+
+
+class SliceSheetRequest(BaseModel):
+    image: str                      # base64 原图
+    rows: int | None = None
+    cols: int | None = None
+    frame_width: int | None = None
+    frame_height: int | None = None
+    trim: bool = True
+
+
+@app.post("/v1/remove_bg")
+def remove_bg(req: RemoveBgRequest):
+    """抠掉背景, 写出真正带 alpha 的 RGBA PNG。"""
+    if req.mode not in ("auto", "checker", "rembg"):
+        return JSONResponse({"error": "mode 必须是 auto/checker/rembg"}, status_code=400)
+    if req.quality not in REMBG_MODELS:
+        return JSONResponse({"error": f"quality 必须是 {'/'.join(REMBG_MODELS)}"}, status_code=400)
+    img = Image.open(io.BytesIO(base64.b64decode(req.image)))
+    evidence, is_checker, extra = None, None, []
+    if req.mode == "auto":
+        # 按结构证据路由, 不按"抠掉了多少"
+        is_checker, evidence = _looks_like_checkerboard(img)
+        used = "checker" if is_checker else "rembg"
+    else:
+        used = req.mode
+        if used == "checker":
+            # 手动指定也照样取证: 强行对一张照片走 checker 正是白猫翻车的那条路,
+            # 抠出来的洞常常与背景连通 (不是闭合的洞), hole_ratio 抓不到, 只有
+            # "这压根不是棋盘格"这个证据抓得到。
+            is_checker, evidence = _looks_like_checkerboard(img)
+    if used == "checker":
+        alpha, model = _key_checkerboard(img), None
+        if is_checker is False:
+            extra.append(f"你指定了 mode=checker, 但这张图不是 FLUX 的假透明棋盘格 "
+                         f"({evidence.get('reason')}) —— 亮色背景会顺着边缘连通吃进主体, "
+                         f"改用 mode=auto 或 mode=rembg")
+    else:
+        model, alpha = _rembg_alpha(img, req.quality)
+    out = img.convert("RGBA")
+    out.putalpha(Image.fromarray(alpha))
+    name = _new_name("cut", "png")
+    out.save(os.path.join(GENERATED_DIR, name), format="PNG")
+    metrics, warning = _alpha_report(img, alpha, extra)
+    res = {"file_url": f"/files/{name}", "transparent_ratio": metrics["transparent_ratio"],
+           "mode_used": used, "model": model, "metrics": metrics}
+    if evidence:
+        res["checker_evidence"] = evidence
+    if warning:
+        log.warning("remove_bg %s: %s", name, warning)
+        res["warning"] = warning
+    return res
+
+
+@app.post("/v1/slice_sheet")
+def slice_sheet(req: SliceSheetRequest):
+    """把排成网格的 sprite sheet 切成单帧 PNG。"""
+    img = Image.open(io.BytesIO(base64.b64decode(req.image)))
+    W, H = img.size
+    if req.rows and req.cols:
+        rows, cols = req.rows, req.cols
+        fw, fh = W // cols, H // rows
+    elif req.frame_width and req.frame_height:
+        fw, fh = req.frame_width, req.frame_height
+        rows, cols = H // fh, W // fw
+    else:
+        return JSONResponse({"error": "必须提供 rows+cols 或 frame_width+frame_height"}, status_code=400)
+    urls = []
+    for r in range(rows):
+        for c in range(cols):
+            f = img.crop((c * fw, r * fh, (c + 1) * fw, (r + 1) * fh))
+            if req.trim:
+                f = _trim(f)
+            name = _new_name("frame", "png")
+            f.save(os.path.join(GENERATED_DIR, name), format="PNG")
+            urls.append(f"/files/{name}")
+    return {"file_urls": urls}
+
+
+# ---- 程序化音效 (sfxr/jsfxr 风格, 纯 numpy) ----
+# 刻意不走 generate_music: 那是 Stable Audio 扩散模型, 47s 上限、单声道铺成立体声、
+# 没有循环点、出来的是宽带糊音。游戏音效是 10~200ms 的瞬态, 要的是精确、即时、可复现,
+# 扩散模型是彻底用错了乐器。这里不碰 GPU 也不碰网络, 一次合成 ~10ms。
+SFX_RATE = 44100
+MAX_SFX_SECONDS = float(os.getenv("MAX_SFX_SECONDS", "5"))
+SFX_WAVES = ("square", "saw", "sine", "triangle", "noise")
+
+
+@dataclass
+class SfxParams:
+    wave: str = "square"          # square / saw / sine / triangle / noise
+    # 包络 (秒): attack 0->1, decay 1->sustain_level, sustain 保持, release ->0
+    attack: float = 0.005
+    decay: float = 0.03
+    sustain: float = 0.06
+    sustain_level: float = 0.8
+    release: float = 0.10
+    base_freq: float = 440.0      # Hz (noise 波形下是采样保持的刷新率)
+    freq_slide: float = 0.0       # 八度/秒
+    delta_slide: float = 0.0      # 八度/秒^2
+    duty: float = 0.5             # 方波占空比
+    duty_sweep: float = 0.0       # 占空比变化/秒
+    vibrato_depth: float = 0.0    # 半音
+    vibrato_speed: float = 0.0    # Hz
+    arp_mult: float = 1.0         # arp_time 之后基频乘以它 (金币的两段音阶)
+    arp_time: float = 0.0         # 秒
+    lpf: float = 1.0              # 低通截止, 归一化 (1 = 不滤)
+    lpf_sweep: float = 0.0        # 截止的八度/秒
+    hpf: float = 0.0              # 高通截止, 归一化 (0 = 不滤)
+    volume: float = 0.95          # 归一化后的峰值
+
+
+SFX_PRESETS = {
+    "jump":      dict(wave="square", base_freq=360, freq_slide=3.0, attack=0.005, decay=0.03,
+                      sustain=0.07, sustain_level=0.85, release=0.09, duty=0.5, duty_sweep=0.5),
+    "coin":      dict(wave="square", base_freq=988, arp_mult=1.5, arp_time=0.06, attack=0.002,
+                      decay=0.012, sustain=0.10, sustain_level=0.9, release=0.22, duty=0.35),
+    "hit":       dict(wave="noise", base_freq=3000, freq_slide=-2.5, attack=0.001, decay=0.02,
+                      sustain=0.02, sustain_level=0.5, release=0.13, lpf=0.55, lpf_sweep=-2.5),
+    "explosion": dict(wave="noise", base_freq=44100, freq_slide=-0.9, attack=0.002, decay=0.10,
+                      sustain=0.25, sustain_level=0.8, release=0.85, lpf=0.95, lpf_sweep=-0.5),
+    "powerup":   dict(wave="square", base_freq=320, freq_slide=1.2, arp_mult=1.25, arp_time=0.20,
+                      attack=0.01, decay=0.05, sustain=0.24, sustain_level=0.85, release=0.24,
+                      vibrato_depth=0.35, vibrato_speed=13.0),
+    "laser":     dict(wave="saw", base_freq=1500, freq_slide=-3.6, attack=0.001, decay=0.02,
+                      sustain=0.05, sustain_level=0.7, release=0.15, hpf=0.02),
+    "select":    dict(wave="square", base_freq=880, attack=0.002, decay=0.012, sustain=0.03,
+                      sustain_level=0.8, release=0.045, duty=0.25),
+    "hurt":      dict(wave="saw", base_freq=520, freq_slide=-1.5, attack=0.002, decay=0.03,
+                      sustain=0.05, sustain_level=0.6, release=0.17, lpf=0.7),
+}
+
+# seed 抖动的是参数, 不是采样点 —— 同一个 preset 听起来还是它自己, 只是每次略有不同。
+_SFX_JITTER = {"base_freq": 0.10, "freq_slide": 0.15, "duty": 0.12, "decay": 0.15,
+               "sustain": 0.15, "release": 0.15, "arp_mult": 0.04, "arp_time": 0.15,
+               "vibrato_depth": 0.20, "lpf": 0.08}
+
+
+def _sfx_params(preset, seed=None, overrides=None):
+    if preset not in SFX_PRESETS:
+        raise ValueError(f"未知 preset: {preset} (可用: {', '.join(SFX_PRESETS)})")
+    p = SfxParams(**SFX_PRESETS[preset])
+    rng = np.random.default_rng(seed)
+    if seed is not None:
+        for field, amount in _SFX_JITTER.items():
+            v = getattr(p, field)
+            if v:
+                setattr(p, field, float(v) * float(1.0 + rng.uniform(-amount, amount)))
+    for k, v in (overrides or {}).items():
+        if not hasattr(p, k):
+            raise ValueError(f"未知参数: {k}")
+        setattr(p, k, v if k == "wave" else float(v))
+    if p.wave not in SFX_WAVES:
+        raise ValueError(f"wave 必须是 {'/'.join(SFX_WAVES)}")
+    total = p.attack + p.decay + p.sustain + p.release
+    if not (0.005 <= total <= MAX_SFX_SECONDS):
+        raise ValueError(f"总时长 {total:.3f}s 超出 0.005~{MAX_SFX_SECONDS}s")
+    return p, rng
+
+
+def _sfx_envelope(p, n):
+    na = max(1, int(p.attack * SFX_RATE))
+    nd = max(1, int(p.decay * SFX_RATE))
+    ns = max(0, int(p.sustain * SFX_RATE))
+    nr = max(1, n - na - nd - ns)
+    sl = float(np.clip(p.sustain_level, 0.0, 1.0))
+    env = np.concatenate([
+        np.linspace(0.0, 1.0, na, endpoint=False),
+        np.linspace(1.0, sl, nd, endpoint=False),
+        np.full(ns, sl),
+        np.linspace(sl, 0.0, nr),
+    ])
+    return env[:n] if env.size >= n else np.concatenate([env, np.zeros(n - env.size)])
+
+
+def _sfx_filters(x, p, t):
+    """一阶低通 (可扫频) + 一阶高通。逐样本递归, 无法向量化, 但音效最长几万个样本。"""
+    if p.lpf >= 1.0 and not p.lpf_sweep and p.hpf <= 0.0:
+        return x
+    cut = np.clip(p.lpf * np.exp2(p.lpf_sweep * t), 0.001, 1.0).tolist()
+    a = float(np.clip(1.0 - p.hpf, 0.0, 1.0))
+    xs, out = x.tolist(), []
+    lp = hp = hp_prev_in = 0.0
+    for i, s in enumerate(xs):
+        lp += cut[i] * (s - lp)
+        hp = a * (hp + lp - hp_prev_in)
+        hp_prev_in = lp
+        out.append(hp)
+    return np.asarray(out, dtype=np.float64)
+
+
+def _sfx_render(p, rng):
+    """按参数合成一段单声道 float64 波形 (峰值归一化到 p.volume)。"""
+    n = max(2, int(round((p.attack + p.decay + p.sustain + p.release) * SFX_RATE)))
+    t = np.arange(n, dtype=np.float64) / SFX_RATE
+    octaves = p.freq_slide * t + 0.5 * p.delta_slide * t * t
+    if p.vibrato_depth and p.vibrato_speed:
+        octaves = octaves + (p.vibrato_depth / 12.0) * np.sin(2 * np.pi * p.vibrato_speed * t)
+    f = p.base_freq * np.exp2(octaves)
+    if p.arp_mult != 1.0 and p.arp_time > 0:
+        f = np.where(t >= p.arp_time, f * p.arp_mult, f)
+    # noise 的"频率"是采样保持的刷新率, 可以一直到采样率 (刷新率 = 采样率就是白噪声)
+    f = np.clip(f, 10.0, SFX_RATE if p.wave == "noise" else 0.45 * SFX_RATE)
+    phase = np.cumsum(f) / SFX_RATE
+    frac = phase - np.floor(phase)
+    if p.wave == "sine":
+        x = np.sin(2 * np.pi * frac)
+    elif p.wave == "saw":
+        x = 2.0 * frac - 1.0
+    elif p.wave == "triangle":
+        x = 4.0 * np.abs(frac - 0.5) - 1.0
+    elif p.wave == "noise":
+        table = rng.uniform(-1.0, 1.0, size=n + 8)     # 够长, 不会在一次音效里循环
+        x = table[np.floor(phase).astype(np.int64) % table.size]
+    else:                                              # square
+        duty = np.clip(p.duty + p.duty_sweep * t, 0.01, 0.99)
+        x = np.where(frac < duty, 1.0, -1.0)
+    x = _sfx_filters(x * _sfx_envelope(p, n), p, t)
+    peak = float(np.max(np.abs(x)))
+    if peak > 0:
+        x = x * (p.volume / peak)
+    return x
+
+
+def _write_wav(path, x):
+    pcm = np.clip(np.round(x * 32767.0), -32768, 32767).astype("<i2")
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SFX_RATE)
+        w.writeframes(pcm.tobytes())
+
+
+class SfxRequest(BaseModel):
+    preset: str = "select"
+    seed: int | None = None                 # 固定 seed -> 逐字节可复现
+    overrides: dict | None = None           # 覆盖 SfxParams 的任意字段
+
+
+@app.post("/v1/gen_sfx")
+def gen_sfx(req: SfxRequest):
+    """按 sfxr 风格的参数合成一枚游戏音效, 写出 44.1kHz 16bit 单声道 WAV。"""
+    try:
+        p, rng = _sfx_params(req.preset, req.seed, req.overrides)
+        x = _sfx_render(p, rng)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    name = _new_name("sfx", "wav")
+    _write_wav(os.path.join(GENERATED_DIR, name), x)
+    log.info("sfx: %s preset=%s seed=%s %.3fs", name, req.preset, req.seed, x.size / SFX_RATE)
+    return {"file_url": f"/files/{name}", "preset": req.preset, "seed": req.seed,
+            "duration": round(x.size / SFX_RATE, 4), "params": asdict(p)}
+
+
+@app.get("/v1/sfx_presets")
+def sfx_presets():
+    return {"presets": sorted(SFX_PRESETS), "params": asdict(SfxParams()), "rate": SFX_RATE}
 
 
 @app.get("/health")

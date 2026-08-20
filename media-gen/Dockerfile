@@ -17,6 +17,14 @@ RUN python3 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# rembg 权重在构建期就下好烤进镜像。
+# 这个服务的 compose 只挂 app.py 和 generated, 没有 cache 卷可用, 烤进来
+# 才能保证冷启动不去 GitHub 拉模型。
+# birefnet-general-lite (~214 MB) 是 remove_bg 的默认模型 —— 同机实测软边像素
+# 5127 vs u2netp 的一圈灰雾, 慢 5.7s 但出来的图能直接用; u2netp (~4.4 MB)
+# 留着给 quality="fast"。
+ENV U2NET_HOME=/opt/u2net
+RUN python -c "from rembg import new_session; new_session('u2netp'); new_session('birefnet-general-lite')"
 WORKDIR /app
 COPY app.py .
 EXPOSE 9010

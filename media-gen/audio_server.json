@@ -11,7 +11,20 @@
       "family": "stable_audio",
       "path": "/models/audio/stable-audio-3-small-music-f16.gguf",
       "task": "gen",
-      "mode": "offline"
+      "mode": "offline",
+      "session_options": {
+        "stable_audio.mem_saver": true
+      }
+    },
+    {
+      "id": "qwen3-tts",
+      "family": "qwen3_tts",
+      "path": "/models/audio/Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF",
+      "task": "vdes",
+      "mode": "offline",
+      "session_options": {
+        "qwen3_tts.mem_saver": true
+      }
     }
   ]
 }
