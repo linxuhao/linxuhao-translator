@@ -82,7 +82,7 @@ mcp = FastMCP(
         "  - 内部是异步任务, 提交后阻塞等待完成 (最长 ~30 分钟), 返回生成文件的下载 URL。\n"
         "  - 生成的文件由 media-gen 服务提供下载 (URL 已含在返回结果里, 远程部署时 MEDIA_GEN_PUBLIC_URL 指向模型机的 Tailscale IP)。\n"
         "  - generate_image 支持图生图: 传 reference_image_file_id (先上传参考图) 或 reference_image_base64。\n"
-        "  - generate_music 支持 duration (音频秒数, 最长 120) 和 num_inference_steps。\n  - generate_speech 是一次性旁白: voice 传一段声音描述, 但跨句音色会漂, 不适合同一个角色说多句。\n  - 游戏 NPC 对白用 create_actor 铸声一次 + actor_tts 说每一句, 音色才稳定。\n\n"
+        "  - generate_music 支持 duration (音频秒数, 最长 120) 和 num_inference_steps。\n  - generate_speech 是一次性旁白: voice 传一段声音描述, 但跨句音色会漂, 不适合同一个角色说多句。\n  - 游戏 NPC 对白用 create_actor 铸声一次 + actor_tts 说每一句, 音色才稳定。\n  - 同理: generate_image 每张长相会变, 角色素材用 create_character 定妆一次 + character_image 出每张。\n\n"
         "MCP 工具:\n"
         "  transcribe_audio(audio_file_id='...')\n"
         "  ocr_image(image_file_id='...')\n"
@@ -95,6 +95,9 @@ mcp = FastMCP(
         "  create_actor(name='郭靖', voice='一段声音描述')  # 给角色铸声, 返回试音 URL, 先听\n"
         "  list_actors()\n"
         "  actor_tts(actor='郭靖', text='台词')  # 同一角色每句音色一致\n"
+        "  create_character(name='郭靖', appearance='长相描述')  # 定妆, 返回定妆图 URL, 先看\n"
+        "  list_characters() / character_image(character='郭靖', scene='骑马射雕')  # 每张长相一致\n"
+        "  delete_actor(name) / delete_character(name)  # 不可逆\n"
         "  remove_bg(image_url='...', mode?)  # 抠成真 RGBA (FLUX 画的棋盘格不是透明)\n"
         "  slice_sheet(image_url='...', rows=2, cols=2, trim?)  # 网格 sprite sheet 切单帧\n"
         "  vision_critique(prompt='...', image_url='...')  # 自定义提问的看图点评\n"
@@ -611,6 +614,90 @@ async def generate_speech(text: str, voice: str = None, seed: int = None,
     if not result["ok"]:
         return f"语音生成失败: {result['error']}"
     return f"语音已生成: {MEDIA_GEN_PUBLIC_URL}{result['file_url']}"
+
+
+@mcp.tool()
+async def create_character(name: str, appearance: str, width: int = 512, height: int = 512,
+                           seed: int = None, force: bool = False) -> str:
+    """给一个角色定妆(生成并存下参考图), 之后用 character_image 出的每张图长相都一致。
+
+    为什么要有这一步: generate_image 每次给的是"长得不一样的人"。同一个角色的头像 /
+    战斗立绘 / 地图小人, 直接用文字描述生成出来是三个人。本工具先定妆一张参考图,
+    之后每张场景图都带着它走图生图, 长相就和场景描述解耦了。
+    (和 create_actor 是同一个套路的视觉版: 那个钉音色, 这个钉长相。)
+
+    重要: 定完先看 reference_url 那张图, 确认是不是你要的那个人。定妆定砸了会把整个
+    角色锁死在错的长相上, 之后每一张都错得很一致。不满意就 force=True 重定。
+
+    参数:
+        name: 角色名(字母/数字/下划线/连字符/中文, 1~40 字), 之后 character_image 用它指代
+        appearance: 长相描述 —— 只写这个人长什么样(体型/脸/发型/衣着/配色),
+                    不要写场景和动作, 那些留给 character_image 的 scene
+        width/height: 参考图尺寸, 上限 1024
+        seed: 随机种子(可选)
+        force: 覆盖已有角色。会让它之前所有场景图的长相对不上, 慎用
+
+    返回: 定妆图的 URL —— 先看再用
+    """
+    r = await _submit_and_poll({"type": "char_create", "character": name, "prompt": appearance,
+                                "width": width, "height": height, "seed": seed, "force": force})
+    if not r["ok"]:
+        return f"定妆失败: {r['error']}"
+    return (f"角色 '{r.get('character', name)}' 已定妆。"
+            f"定妆图: {MEDIA_GEN_PUBLIC_URL}{r.get('reference_url')} —— "
+            f"先看一眼确认是不是你要的人, 不满意用 create_character(..., force=True) 重定。")
+
+
+@mcp.tool()
+async def list_characters() -> str:
+    """列出已定妆的角色(名字 + 长相描述 + 定妆时间)。"""
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(f"{MEDIA_GEN_URL}/v1/characters")
+    cs = r.json().get("characters", [])
+    if not cs:
+        return "还没有角色。用 create_character(name='...', appearance='...') 定一个。"
+    return "\n".join(f"- {c['name']}: {c['appearance']} (定于 {c['created']})" for c in cs)
+
+
+@mcp.tool()
+async def character_image(character: str, scene: str, width: int = 512, height: int = 512,
+                          seed: int = None) -> str:
+    """让某个已定妆的角色出一张场景图, 长相与他之前每一张都一致。
+
+    做游戏角色素材用这个, 不要用 generate_image —— 后者每张长相会变。
+    角色不存在会告诉你先去 create_character。
+
+    参数:
+        character: 角色名(create_character 时定的)
+        scene: 这张图里他在干什么 / 在哪 —— 只写场景和动作, 长相由定妆图决定
+        width/height: 上限 1024
+        seed: 随机种子(可选)
+
+    返回: 生成文件的下载 URL
+    """
+    r = await _submit_and_poll({"type": "image", "character": character, "prompt": scene,
+                                "width": width, "height": height, "seed": seed})
+    if not r["ok"]:
+        return f"出图失败: {r['error']}"
+    return f"{character} 的场景图已生成: {MEDIA_GEN_PUBLIC_URL}{r['file_url']}"
+
+
+@mcp.tool()
+async def delete_actor(name: str) -> str:
+    """删掉一个已铸声的角色。不可逆: 参考音不可复现, 重铸出来是另一个人。"""
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.delete(f"{MEDIA_GEN_URL}/v1/actors/{name}")
+    d = r.json()
+    return f"已删除 actor '{d['deleted']}'" if r.status_code < 400 else f"删除失败: {d.get('error')}"
+
+
+@mcp.tool()
+async def delete_character(name: str) -> str:
+    """删掉一个已定妆的角色。不可逆: 定妆图不可复现, 重定出来是另一个人。"""
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.delete(f"{MEDIA_GEN_URL}/v1/characters/{name}")
+    d = r.json()
+    return f"已删除 character '{d['deleted']}'" if r.status_code < 400 else f"删除失败: {d.get('error')}"
 
 
 @mcp.tool()

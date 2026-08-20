@@ -225,4 +225,6 @@ generated/
 # 真要保住某个角色, 自己备份或 git add -f。
 actors/*.wav
 actors/*.json
+characters/*.png
+characters/*.json
 cache/

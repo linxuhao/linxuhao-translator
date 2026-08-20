@@ -140,6 +140,7 @@ services:
       - ./generated:/generated
       # 角色参考音: 长期资产, 和有 30 天清理的 ./generated 分开放
       - ./actors:/actors
+      - ./characters:/characters
     depends_on:
       - sd-server
       - audiocpp-server

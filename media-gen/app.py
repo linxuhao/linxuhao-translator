@@ -95,6 +95,37 @@ DEFAULT_SAMPLE_TEXT = os.getenv(
     "江湖路远，人心难测。今日一别，山高水长，来日方长，后会有期。")
 _ACTOR_NAME_RE = re.compile(r"^[\w\u4e00-\u9fff-]{1,40}$")
 
+# ---- Character: 把长相钉在一张参考图上 ----
+# 和 actor 同一个病、同一个解法。text2img 每次给的是"长得不一样的人": 同一个角色
+# 的头像 / 战斗立绘 / 地图小人, 今天是三个人。定妆一次存成参考图, 之后每张图都
+# 带着它走图生图, 长相就跟场景描述解耦了。
+CHARACTERS_DIR = os.getenv("CHARACTERS_DIR", "/characters")
+# 定妆图的取景: 参考图要正面、全身、干净背景, 它是后面每一张的锚
+CHAR_FRAMING = os.getenv(
+    "CHAR_FRAMING",
+    "full body character reference, neutral standing pose, facing viewer, "
+    "plain flat background, clean game art")
+
+
+def _char_paths(name):
+    return (os.path.join(CHARACTERS_DIR, name + ".png"),
+            os.path.join(CHARACTERS_DIR, name + ".json"))
+
+
+def _load_character(name):
+    _, meta = _char_paths(name)
+    if not os.path.isfile(meta):
+        return None
+    with open(meta, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _character_names():
+    try:
+        return sorted(f[:-5] for f in os.listdir(CHARACTERS_DIR) if f.endswith(".json"))
+    except OSError:
+        return []
+
 
 def _actor_paths(name):
     return (os.path.join(ACTORS_DIR, name + ".wav"),
@@ -192,18 +223,18 @@ _job_queue = queue.Queue()
 _job_lock = threading.Lock()
 
 
-def _run_image(job):
-    t = time.time()
+def _sd_generate(job, prompt, ref_b64=None):
+    """向 sd_server 提交一张图并等它出来, 返回 (图片字节, 后缀)。"""
     payload = {
-        "prompt": job["prompt"],
+        "prompt": prompt,
         "width": job["width"], "height": job["height"],
         "steps": job.get("num_inference_steps") or 4,
         "cfg_scale": job.get("guidance_scale") or 1.0,
     }
     if job.get("seed") is not None:
         payload["seed"] = job["seed"]
-    if job.get("image"):
-        payload["ref_images"] = [job["image"]]        # base64 参考图 -> 图生图
+    if ref_b64:
+        payload["ref_images"] = [ref_b64]             # base64 参考图 -> 图生图
     sub = _post(f"{SD_SERVER}/sdcpp/v1/img_gen", payload, "sd_server", timeout=60)
     poll = f"{SD_SERVER}{sub['poll_url']}"
     deadline = time.time() + JOB_TIMEOUT_S
@@ -219,14 +250,62 @@ def _run_image(job):
     imgs = st["result"].get("images") or []
     if not imgs:
         raise RuntimeError("sd_server returned no images")
-    name = _new_name("img", st["result"].get("output_format") or "png")
+    return (base64.b64decode(imgs[0]["b64_json"]),
+            st["result"].get("output_format") or "png")
+
+
+def _ref_b64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+
+def _run_image(job):
+    t = time.time()
+    ref, prompt = job.get("image"), job["prompt"]
+    character = job.get("character")
+    if character:
+        # 角色场景图: 长相由参考图决定, prompt 只管场景/动作
+        c = _load_character(character)
+        if c is None:
+            raise RuntimeError(f"character '{character}' 不存在")
+        ref = _ref_b64(c["reference_path"])
+        prompt = f'{c["appearance"]}, {prompt}'
+    data, ext = _sd_generate(job, prompt, ref)
+    name = _new_name("img", ext)
     out = os.path.join(GENERATED_DIR, name)
     with open(out, "wb") as f:
-        f.write(base64.b64decode(imgs[0]["b64_json"]))
-    log.info("[sd_server] ok in %.1fs", time.time() - t)
+        f.write(data)
+    log.info("[sd_server] ok in %.1fs%s", time.time() - t,
+             f" (character={character})" if character else "")
     _fit_size(out, job.get("want_width", job["width"]), job.get("want_height", job["height"]))
     _check_image(out)
     return name
+
+
+def _run_char_create(job):
+    """定妆: 生成一张参考图存成角色。和铸声一样走任务队列 —— 它要用 GPU。"""
+    t = time.time()
+    name = job["character"]
+    png, meta_path = _char_paths(name)
+    prompt = f'{job["prompt"]}, {CHAR_FRAMING}'
+    data, _ = _sd_generate(job, prompt)
+    os.makedirs(CHARACTERS_DIR, exist_ok=True)
+    with open(png, "wb") as f:
+        f.write(data)
+    _check_image(png)          # 退化的参考图会污染这个角色的每一张场景图
+    meta = {
+        "name": name,
+        "appearance": job["prompt"],
+        "prompt": prompt,
+        "reference_path": png,
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "seed": job.get("seed"),
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    log.info("[character] 定妆 %s 完成 (%.1fs)", name, time.time() - t)
+    return None, {"character": name, "appearance": job["prompt"],
+                  "reference_url": f"/v1/characters/{name}/image"}
 
 
 def _fit_size(path, want_w, want_h):
@@ -371,7 +450,7 @@ def _run_speech(job):
 
 
 _RUNNERS = {"image": _run_image, "music": _run_music, "speech": _run_speech,
-            "actor_create": _run_actor_create}
+            "actor_create": _run_actor_create, "char_create": _run_char_create}
 
 
 def _worker():
@@ -420,9 +499,10 @@ threading.Thread(target=_worker, daemon=True).start()
 
 # ---- 请求体 ----
 class JobRequest(BaseModel):
-    type: str = Field(..., description="image / music / speech / actor_create")
+    type: str = Field(..., description="image / music / speech / actor_create / char_create")
     prompt: str = ""                  # speech 时是要念的文本; actor_create 时是铸声台词
     actor: str | None = None          # speech: 用哪个角色的音色; actor_create: 角色名
+    character: str | None = None      # image: 用哪个角色的长相; char_create: 角色名
     instruct: str | None = None       # 声音的自然语言描述 (actor_create 必填)
     force: bool = False               # actor_create: 覆盖已有角色
     speaking_rate: float | None = None
@@ -442,7 +522,23 @@ async def submit_job(req: JobRequest):
         return JSONResponse({"error": f"type 必须是 {'/'.join(_RUNNERS)}"}, status_code=400)
     job = req.model_dump()
     clamped = None
-    if req.type == "image":
+    if req.type == "char_create":
+        name = (req.character or "").strip()
+        if not _ACTOR_NAME_RE.match(name):
+            return JSONResponse({"error": "character 名只能是字母/数字/下划线/连字符/中文, 1~40 字"},
+                                status_code=400)
+        if not req.prompt.strip():
+            return JSONResponse({"error": "char_create 的 prompt 是长相描述, 不能为空"},
+                                status_code=400)
+        if _load_character(name) is not None and not req.force:
+            return JSONResponse(
+                {"error": f"character '{name}' 已存在。定妆一次用一辈子, 覆盖会让它之前"
+                          f"所有场景图的长相对不上 —— 确实要重定就传 force=true。"},
+                status_code=409)
+        job["character"] = name
+        job["want_width"] = job["width"] = max(256, min(req.width, MAX_IMAGE_SIZE))
+        job["want_height"] = job["height"] = max(256, min(req.height, MAX_IMAGE_SIZE))
+    elif req.type == "image":
         # Two different sizes, and conflating them is what made every sprite the
         # wrong shape: `want_*` is what the CALLER gets (only the upper bound
         # applies — _fit_size resizes the result at the end), while `width`/
@@ -454,6 +550,12 @@ async def submit_job(req: JobRequest):
         job["height"] = max(256, job["want_height"])
         if (job["want_width"], job["want_height"]) != (req.width, req.height):
             clamped = {"width": job["want_width"], "height": job["want_height"]}
+        if req.character and _load_character(req.character) is None:
+            return JSONResponse(
+                {"error": f"character '{req.character}' 不存在 —— 先调 "
+                          f"create_character(name='{req.character}', appearance='一段长相描述') "
+                          f"定妆, 再用它出场景图。现有角色: {_character_names() or '(还没有)'}"},
+                status_code=404)
     elif req.type == "actor_create":
         name = (req.actor or "").strip()
         if not _ACTOR_NAME_RE.match(name):
@@ -1047,6 +1149,49 @@ def gen_sfx(req: SfxRequest):
 @app.get("/v1/sfx_presets")
 def sfx_presets():
     return {"presets": sorted(SFX_PRESETS), "params": asdict(SfxParams()), "rate": SFX_RATE}
+
+
+@app.get("/v1/characters")
+async def list_characters():
+    out = []
+    for n in _character_names():
+        c = _load_character(n)
+        if c:
+            out.append({k: c.get(k) for k in ("name", "appearance", "created")})
+    return {"characters": out}
+
+
+@app.get("/v1/characters/{name}/image")
+async def character_image(name: str):
+    """角色的定妆参考图。定妆之后应该先看一眼再拿它出整部戏的图。"""
+    safe = os.path.basename(name)
+    png, _ = _char_paths(safe)
+    if not os.path.isfile(png):
+        return JSONResponse({"error": f"character '{safe}' 不存在"}, status_code=404)
+    return FileResponse(png)
+
+
+def _drop(paths, kind, name):
+    """删掉一个角色。参考音/参考图不可复现 —— 重铸出来是另一个人, 所以这是不可逆的。"""
+    gone = [q for q in paths if os.path.isfile(q)]
+    if not gone:
+        return JSONResponse({"error": f"{kind} '{name}' 不存在"}, status_code=404)
+    for q in gone:
+        os.remove(q)
+    log.info("[%s] 删除 %s (%d 个文件)", kind, name, len(gone))
+    return {"deleted": name, "files": len(gone)}
+
+
+@app.delete("/v1/actors/{name}")
+async def delete_actor(name: str):
+    safe = os.path.basename(name)
+    return _drop(_actor_paths(safe), "actor", safe)
+
+
+@app.delete("/v1/characters/{name}")
+async def delete_character(name: str):
+    safe = os.path.basename(name)
+    return _drop(_char_paths(safe), "character", safe)
 
 
 @app.get("/v1/actors")
