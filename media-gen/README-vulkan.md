@@ -273,22 +273,25 @@ linxuhao-ai     (有 GPU)  vllm-qwen / qwen3-asr / media-gen / sd-server / audio
 linxuhaserver   (无 GPU)  mcp-server / gateway / cloudflared
 ```
 
-网关机上的 `mcp-server` 要跨机访问 AI 机, 所以它的 `MEDIA_GEN_URL` /
-`MEDIA_GEN_PUBLIC_URL` / `VLLM_URL` / `ASR_URL` 必须指向 `linxuhao-ai`, 并且需要
-`extra_hosts` 把这个名字映射到 Tailscale 地址（容器内不走 MagicDNS）。
+跨机 URL 的默认值直接写成 `http://linxuhao-ai:<port>`，需要它的两个服务
+(`gateway`、`mcp-server`) 都带了 `extra_hosts`（容器内不走 Tailscale MagicDNS）。
+这个形式**两台机都通** —— 在 AI 机上它指向自己的 Tailscale 地址，正好是那些服务
+发布出来的端口。
 
-URL 类的可以直接用 `.env` 覆盖；`extra_hosts` 表达不了, 所以网关机需要一个
-override 文件。模板在 **`deploy/linxuhaserver.override.yml`**：
+所以两台机都**不需要 `.env`，也不需要 `docker-compose.override.yml`**：
 
 ```bash
-# 只在 linxuhaserver 上做, AI 机不要放这个文件
-cp deploy/linxuhaserver.override.yml docker-compose.override.yml
+# AI 机
+docker compose up -d vllm-qwen qwen3-asr media-gen sd-server audiocpp-server
+# 网关机
 docker compose up -d mcp-server gateway cloudflared
 ```
 
-之前这个 override 只存在于那台机的磁盘上、没有入库 —— 丢了整台网关机的配置就没了。
-现在模板在仓库里, 真正生效的 `docker-compose.override.yml` 仍然不入库
-（它一旦入库会在 AI 机上也自动生效, 那是错的）。
+AI 机换了 Tailscale 地址时，改 `.env` 里的 `LINXUHAO_AI_IP` 一个值即可。
+
+（这里原先是一个只存在于网关机磁盘上、没有入库的 override 文件。它做的两件事 ——
+覆盖 URL 和加 `extra_hosts` —— 前者 `.env` 就能做，后者写进 base compose 即可，
+所以整个文件是多余的。）
 
 ## 从零部署
 

@@ -21,6 +21,13 @@ services:
       - "5000:5000"
     volumes:
       - ./gateway/app:/app
+    environment:
+      - BRAIN_ENGINE_URL=${BRAIN_ENGINE_URL:-http://linxuhao-ai:8000/v1/chat/completions}
+      - ASR_ENGINE_URL=${ASR_ENGINE_URL:-http://linxuhao-ai:9000/v1/chat/completions}
+      - ASR_TRANSCRIBE_URL=${ASR_TRANSCRIBE_URL:-http://linxuhao-ai:9000/v1/audio/transcriptions}
+    # 容器内不走 Tailscale MagicDNS, 所以显式映射 AI 机。
+    extra_hosts:
+      - "linxuhao-ai:${LINXUHAO_AI_IP:-100.68.74.107}"
     restart: unless-stopped
 
   # ==========================================
@@ -104,13 +111,19 @@ services:
     ports:
       - "9003:9003"
     environment:
-      - ASR_URL=http://qwen3_asr:8000/v1/chat/completions
-      - VLLM_URL=http://vllm_qwen:8000/v1/chat/completions
-      - SEARXNG_URL=http://linxuhaserver:8888/search
-      - MEDIA_GEN_URL=${MEDIA_GEN_URL:-http://media_gen:9010}
-      # 工具返回的下载 URL 用这个前缀。不设的话会回落到上面的容器内主机名,
-      # 而调用方 (linxuhaserver 上的 AItelier) 解析不了 media_gen —— 实测 curl 返回 000。
-      - MEDIA_GEN_PUBLIC_URL=${MEDIA_GEN_PUBLIC_URL:-http://100.68.74.107:9010}
+      # 默认一律写跨机形式。mcp-server 跑在 linxuhaserver 上而推理都在 linxuhao-ai,
+      # 用容器内主机名 (qwen3_asr / media_gen) 只在同机时成立 —— 实测跨机 curl 返回 000。
+      # 跨机形式两台机都通 (AI 机上它指向自己的 Tailscale 地址, 正好是发布出来的端口),
+      # 所以不需要任何 override 文件。
+      - ASR_URL=${ASR_URL:-http://linxuhao-ai:9000/v1/chat/completions}
+      - VLLM_URL=${VLLM_URL:-http://linxuhao-ai:8000/v1/chat/completions}
+      - SEARXNG_URL=${SEARXNG_URL:-http://linxuhaserver:8888/search}
+      - MEDIA_GEN_URL=${MEDIA_GEN_URL:-http://linxuhao-ai:9010}
+      # 工具返回给调用方的下载 URL 前缀, 必须是调用方能解析的地址
+      - MEDIA_GEN_PUBLIC_URL=${MEDIA_GEN_PUBLIC_URL:-http://linxuhao-ai:9010}
+    # 容器内不走 Tailscale MagicDNS, 所以显式映射 AI 机。
+    extra_hosts:
+      - "linxuhao-ai:${LINXUHAO_AI_IP:-100.68.74.107}"
     restart: unless-stopped
 
   # ==========================================
