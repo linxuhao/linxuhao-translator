@@ -1,24 +1,33 @@
 # ==========================================
 # 文件名: media-gen/app.py
-# 架构定位: GPU 1 (7800 XT) 媒体生成服务 (异步 job API)
+# 架构定位: GPU 1 (7800 XT / gfx1101) 媒体生成服务 (异步 job API)
 #   - POST /v1/jobs         提交任务 -> job_id (不阻塞)
 #   - GET  /v1/jobs/{id}    轮询状态 queued/running/done/failed
 #   - 生成结果写入 /generated, 由 mcp-server 的 /files/{name} 提供下载
 #
-# 模型懒加载 + 互斥常驻 + 单 worker 串行 (16GB 只装得下一个模型)
+# 2026-08-20 重写: 后端从 PyTorch+ROCm 换成 ggml+Vulkan。
+#   起因: ROCm 在这张卡上静默算错 —— AutoencoderKLFlux2 / AutoencoderOobleck 的
+#   decode 非确定 (同输入连调 5 次两两不相关), 图像出纯灰、音频出宽带噪声, 而每个
+#   基础算子 (GEMM/Conv/GroupNorm/SDPA/RNG) 都逐位确定。已报 ROCm/ROCm#6633。
+#   Vulkan (RADV) 走的是运行时编译的 SPIR-V, 不查 per-gfx 预编译 kernel 表,
+#   同一块卡上结果正确且更快 (生图 15.8s 全 GPU vs 之前 77s 且 VAE 必须放 CPU)。
+#
+# 每个请求 fork 一次 CLI, 用完即释放显存 —— 图像和音乐不会争 VRAM。
 # ==========================================
 import io
 import os
+import json
 import uuid
 import time
 import queue
 import asyncio
 import base64
+import urllib.request
 import threading
 import logging
+import wave
 
 import numpy as np
-import torch
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
@@ -27,119 +36,72 @@ from PIL import Image
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("media-gen")
 
-app = FastAPI(title="media-gen", version="0.2.0")
+app = FastAPI(title="media-gen", version="0.3.0")
 
 # ---- 配置 ----
-MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "768"))
 GENERATED_DIR = os.getenv("GENERATED_DIR", "/generated")
+VULKAN_DEVICE = os.getenv("VULKAN_DEVICE", "1")          # 1 = RX 7800 XT
+MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1024"))
+# 引擎自己在 120s 硬截断: 请求 180/240/300/480 都返回 120001 ms 且不报错。
+# 保留这个上限不是防炸 (显存/耗时都与时长无关, 实测 6173 MiB / 6s 恒定),
+# 而是把引擎的"静默截断"变成响应里显式的 clamped 字段, 让调用方知道自己被截了。
+MAX_AUDIO_SECONDS = float(os.getenv("MAX_AUDIO_SECONDS", "120"))
+JOB_TIMEOUT_S = float(os.getenv("JOB_TIMEOUT_S", "900"))
 
-# ---- 模型懒加载 (互斥常驻) ----
-_LOCK = threading.Lock()
-_t2i = {}
-_t2m = {}
+# 两个 ggml 引擎以常驻 server 运行, 模型不再每次请求重载。
+# 权重是 mmap 的 (sd_server RSS 只有 ~340 MiB, 12.6 GB 走 page cache),
+# 所以常驻的内存代价很小, 且内核可在压力下回收。
+SD_SERVER = os.getenv("SD_SERVER", "http://sd_server:9020")
+AUDIO_SERVER = os.getenv("AUDIO_SERVER", "http://audiocpp_server:9021")
+AUDIO_MODEL_ID = os.getenv("AUDIO_MODEL_ID", "stable-audio")
 
-
-def _free_t2m():
-    _t2m.clear()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
-def _free_t2i():
-    _t2i.clear()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
-def get_t2i():
-    if "pipe" not in _t2i:
-        with _LOCK:
-            if "pipe" not in _t2i:
-                _free_t2m()
-                from diffusers import Flux2KleinPipeline
-                log.info("loading FLUX.2-klein-4B ...")
-                pipe = Flux2KleinPipeline.from_pretrained(
-                    "black-forest-labs/FLUX.2-klein-4B",
-                    torch_dtype=torch.bfloat16,
-                )
-                # 文本编码器 + VAE 卸载到 CPU, 仅 transformer 常驻 GPU (适配 16GB 卡)
-                pipe.enable_model_cpu_offload()
-                try:
-                    pipe.enable_vae_slicing()
-                    pipe.enable_vae_tiling()
-                except Exception:
-                    pass
-                _t2i["pipe"] = pipe
-                log.info("FLUX.2-klein-4B loaded")
-    return _t2i["pipe"]
-
-
-def get_t2m():
-    if "pipe" not in _t2m:
-        with _LOCK:
-            if "pipe" not in _t2m:
-                _free_t2i()
-                from diffusers import StableAudioPipeline
-                log.info("loading stable-audio-open-1.0 ...")
-                pipe = StableAudioPipeline.from_pretrained(
-                    "stabilityai/stable-audio-open-1.0",
-                    torch_dtype=torch.float16,
-                )
-                # AMD torchsde 布朗树递归 bug workaround: 换确定性 EDM scheduler (不用 torchsde)
-                from diffusers import EDMDPMSolverMultistepScheduler
-                pipe.scheduler = EDMDPMSolverMultistepScheduler.from_config(
-                    pipe.scheduler.config, algorithm_type="dpmsolver++"
-                )
-                pipe.to("cuda")
-                _t2m["pipe"] = pipe
-                log.info("stable-audio-open-1.0 loaded")
-    return _t2m["pipe"]
-
-
-# ---- 工具函数 ----
-def _make_generator(seed):
-    gen = torch.Generator(device="cuda")
-    if seed is not None:
-        gen = gen.manual_seed(seed)
-    return gen
-
-
-def _get_sample_rate(pipe, out):
-    for src in (out, pipe, getattr(pipe, "scheduler", None), getattr(pipe, "vae", None)):
-        for attr in ("sample_rate", "sampling_rate"):
-            v = getattr(src, attr, None)
-            if v:
-                return int(v)
-        cfg = getattr(src, "config", None)
-        if isinstance(cfg, dict):
-            for k in ("sample_rate", "sampling_rate"):
-                if cfg.get(k):
-                    return int(cfg[k])
-    return 44100
-
-
-def _to_wav(audio: np.ndarray, sr: int) -> bytes:
-    import wave
-    data = np.asarray(audio)
-    if data.ndim == 1:
-        data = data[:, None]
-    elif data.ndim == 2 and data.shape[0] < data.shape[1] and data.shape[0] <= 8:
-        data = data.T
-    if data.dtype != np.int16:
-        data = np.clip(data, -1.0, 1.0)
-        data = (data * 32767.0).astype(np.int16)
-    n_channels = data.shape[1] if data.ndim == 2 else 1
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(n_channels)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(data.tobytes())
-    return buf.getvalue()
+# ---- 输出校验 ----
+# 今天最贵的教训: 旧实现在生成失败时写出一个全 0 的 WAV 却返回 status=done。
+# 任何"看起来成功但内容退化"的输出都必须让任务显式失败。
+MIN_IMAGE_STD = float(os.getenv("MIN_IMAGE_STD", "3.0"))     # 纯灰图实测 std=0.5
+MIN_AUDIO_RMS_DBFS = float(os.getenv("MIN_AUDIO_RMS_DBFS", "-60"))
 
 
 def _new_name(prefix, ext):
     return f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
+
+
+def _post(url, payload, tag, timeout=None):
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout or JOB_TIMEOUT_S) as r:
+        return json.loads(r.read())
+
+
+def _get(url, timeout=30):
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def _check_image(path):
+    a = np.asarray(Image.open(path).convert("RGB"), dtype=np.float32)
+    std = float(a.std())
+    if std < MIN_IMAGE_STD:
+        raise ValueError(
+            f"degenerate image: std={std:.3f} < {MIN_IMAGE_STD} — 输出接近纯色, "
+            f"多半是后端算错而不是提示词问题"
+        )
+    log.info("image ok: %s std=%.1f", os.path.basename(path), std)
+
+
+def _check_audio(path):
+    with wave.open(path) as w:
+        n, ch = w.getnframes(), w.getnchannels()
+        x = np.frombuffer(w.readframes(n), dtype=np.int16).astype(np.float32) / 32768.0
+    if x.size == 0:
+        raise ValueError("empty audio")
+    if not np.all(np.isfinite(x)):
+        raise ValueError("audio contains non-finite samples")
+    rms = float(np.sqrt((x ** 2).mean()))
+    dbfs = 20 * np.log10(rms) if rms > 0 else -999.0
+    if dbfs < MIN_AUDIO_RMS_DBFS:
+        raise ValueError(f"degenerate audio: rms={dbfs:.1f} dBFS < {MIN_AUDIO_RMS_DBFS}")
+    log.info("audio ok: %s %.1fs rms=%.1f dBFS", os.path.basename(path), n / w.getframerate(), dbfs)
 
 
 # ---- 任务队列 (单 worker 串行) ----
@@ -149,43 +111,63 @@ _job_lock = threading.Lock()
 
 
 def _run_image(job):
-    pipe = get_t2i()
-    gen = _make_generator(job.get("seed"))
-    kwargs = dict(
-        prompt=job["prompt"],
-        height=job["height"],
-        width=job["width"],
-        num_inference_steps=job.get("num_inference_steps") or 4,
-        guidance_scale=job.get("guidance_scale", 1.0),
-        generator=gen,
-    )
+    t = time.time()
+    payload = {
+        "prompt": job["prompt"],
+        "width": job["width"], "height": job["height"],
+        "steps": job.get("num_inference_steps") or 4,
+        "cfg_scale": job.get("guidance_scale") or 1.0,
+    }
+    if job.get("seed") is not None:
+        payload["seed"] = job["seed"]
     if job.get("image"):
-        ref = Image.open(io.BytesIO(base64.b64decode(job["image"]))).convert("RGB")
-        kwargs["image"] = [ref]
-    out = pipe(**kwargs)
-    img = out.images[0]
-    name = _new_name("img", "png")
-    img.save(os.path.join(GENERATED_DIR, name), format="PNG")
+        payload["ref_images"] = [job["image"]]        # base64 参考图 -> 图生图
+    sub = _post(f"{SD_SERVER}/sdcpp/v1/img_gen", payload, "sd_server", timeout=60)
+    poll = f"{SD_SERVER}{sub['poll_url']}"
+    deadline = time.time() + JOB_TIMEOUT_S
+    while True:
+        st = _get(poll)
+        if st.get("error"):
+            raise RuntimeError(f"sd_server: {st['error']}")
+        if st.get("result"):
+            break
+        if time.time() > deadline:
+            raise TimeoutError(f"sd_server job {sub.get('id')} exceeded {JOB_TIMEOUT_S}s")
+        time.sleep(0.5)
+    imgs = st["result"].get("images") or []
+    if not imgs:
+        raise RuntimeError("sd_server returned no images")
+    name = _new_name("img", st["result"].get("output_format") or "png")
+    out = os.path.join(GENERATED_DIR, name)
+    with open(out, "wb") as f:
+        f.write(base64.b64decode(imgs[0]["b64_json"]))
+    log.info("[sd_server] ok in %.1fs", time.time() - t)
+    _check_image(out)
     return name
 
 
 def _run_music(job):
-    pipe = get_t2m()
-    gen = _make_generator(job.get("seed"))
-    out = pipe(
-        prompt=job["prompt"],
-        generator=gen,
-        num_inference_steps=job.get("num_inference_steps") or 100,
-        audio_end_in_s=job.get("audio_end_in_s", 30.0),
-    )
-    audio = out.audios[0]
-    if isinstance(audio, torch.Tensor):
-        audio = audio.cpu().numpy()
-    sr = _get_sample_rate(pipe, out)
-    wav = _to_wav(audio, sr)
+    t = time.time()
+    req = {
+        "task_route": "text2music",
+        "text": job["prompt"],
+        "duration_seconds": job["audio_end_in_s"],
+    }
+    if job.get("seed") is not None:
+        req["seed"] = job["seed"]
+    if job.get("num_inference_steps"):
+        req["num_inference_steps"] = job["num_inference_steps"]
+    res = _post(f"{AUDIO_SERVER}/v1/tasks/run", {"model": AUDIO_MODEL_ID, "request": req}, "audiocpp_server")
+    b64 = res.get("audio")
+    if not b64:
+        raise RuntimeError(f"audiocpp_server returned no audio: {str(res)[:300]}")
     name = _new_name("music", "wav")
-    with open(os.path.join(GENERATED_DIR, name), "wb") as f:
-        f.write(wav)
+    out = os.path.join(GENERATED_DIR, name)
+    with open(out, "wb") as f:
+        f.write(base64.b64decode(b64))
+    tm = res.get("timing") or {}
+    log.info("[audiocpp_server] ok in %.1fs (rtf=%s)", time.time() - t, tm.get("rtf"))
+    _check_audio(out)
     return name
 
 
@@ -195,18 +177,13 @@ def _worker():
         with _job_lock:
             _jobs[job_id]["status"] = "running"
         try:
-            if job["type"] == "image":
-                name = _run_image(job)
-            else:
-                name = _run_music(job)
+            name = _run_image(job) if job["type"] == "image" else _run_music(job)
             with _job_lock:
-                _jobs[job_id]["status"] = "done"
-                _jobs[job_id]["file"] = name
+                _jobs[job_id].update(status="done", file=name)
         except Exception as e:
             log.exception("job %s failed", job_id)
             with _job_lock:
-                _jobs[job_id]["status"] = "failed"
-                _jobs[job_id]["error"] = str(e)
+                _jobs[job_id].update(status="failed", error=str(e))
 
 
 threading.Thread(target=_worker, daemon=True).start()
@@ -216,13 +193,13 @@ threading.Thread(target=_worker, daemon=True).start()
 class JobRequest(BaseModel):
     type: str = Field(..., description="image 或 music")
     prompt: str
-    width: int = 768
-    height: int = 768
+    width: int = 512
+    height: int = 512
     num_inference_steps: int | None = None
     guidance_scale: float = 1.0
     seed: int | None = None
-    image: str | None = None  # base64 参考图, 传入即为图生图
-    audio_end_in_s: float = 30.0
+    image: str | None = None          # base64 参考图, 传入即为图生图
+    audio_end_in_s: float = 10.0
 
 
 # ---- 端点 ----
@@ -231,15 +208,21 @@ async def submit_job(req: JobRequest):
     if req.type not in ("image", "music"):
         return JSONResponse({"error": "type 必须是 image 或 music"}, status_code=400)
     job = req.model_dump()
+    clamped = None
     if req.type == "image":
-        # 限制分辨率上限, 避免 1024 图生图 OOM
         job["width"] = max(256, min(req.width, MAX_IMAGE_SIZE))
         job["height"] = max(256, min(req.height, MAX_IMAGE_SIZE))
+        if (job["width"], job["height"]) != (req.width, req.height):
+            clamped = {"width": job["width"], "height": job["height"]}
+    else:
+        job["audio_end_in_s"] = max(1.0, min(float(req.audio_end_in_s), MAX_AUDIO_SECONDS))
+        if job["audio_end_in_s"] != req.audio_end_in_s:
+            clamped = {"audio_end_in_s": job["audio_end_in_s"]}
     job_id = uuid.uuid4().hex
     with _job_lock:
         _jobs[job_id] = {"status": "queued", "file": None, "error": None}
     _job_queue.put((job_id, job))
-    return {"job_id": job_id}
+    return {"job_id": job_id, "clamped": clamped}
 
 
 @app.get("/v1/jobs/{job_id}")
@@ -272,7 +255,16 @@ async def serve_file(filename: str):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    down = []
+    for name, url in (("sd_server", f"{SD_SERVER}/sdcpp/v1/capabilities"),
+                      ("audiocpp_server", f"{AUDIO_SERVER}/health")):
+        try:
+            _get(url, timeout=5)
+        except Exception as e:
+            down.append(f"{name}: {e}")
+    if down:
+        return JSONResponse({"status": "degraded", "down": down}, status_code=503)
+    return {"status": "ok", "backend": "ggml/vulkan (persistent servers)", "device": VULKAN_DEVICE}
 
 
 if __name__ == "__main__":
