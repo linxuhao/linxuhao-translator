@@ -211,3 +211,47 @@ services:
       /work/build/linux-vulkan-release/bin/audiocpp_server
       --config /conf/audio_server.json --no-ui
     restart: unless-stopped
+
+  # ==========================================
+  # continuity MCP server (streamable-http, 纯 CPU)
+  #
+  # 迁移第一步: 先把 continuity 立成一个常驻服务, 之后 media-gen 改成薄壳走它。
+  # 本服务不碰显卡 —— 生图/配音都是 HTTP 打给下面那两个引擎, 和 media-gen 打的是
+  # 同一对端口, 引擎自己排队。
+  #
+  # 【不发布端口】这个服务没有任何鉴权, 而它的工具能往磁盘写文件、能删 actor/subject。
+  # 所以 ports: 一行都不能有 —— 只让同一个 compose 网络里的容器按容器名连它。
+  # CONTINUITY_HTTP_HOST 必须是 0.0.0.0: 默认的 127.0.0.1 在容器里意味着连同网络的
+  # 别的容器也连不上 (它只绑 loopback), 那样这个服务等于没起。
+  # 这两条不矛盾: 绑 0.0.0.0 是绑容器的网卡, 不发布端口宿主机上就看不到它。
+  # ==========================================
+  continuity:
+    build:
+      context: ./continuity
+    container_name: continuity_mcp
+    # 以宿主机 uid/gid 跑, 否则 actors/subjects/generated 写出来属主是 root,
+    # 宿主机上要 sudo 才能动 —— 而这些是不可复现的资产, 迟早要手动备份。
+    user: "1000:1000"
+    environment:
+      - CONTINUITY_TRANSPORT=streamable-http
+      - CONTINUITY_HTTP_HOST=0.0.0.0
+      - CONTINUITY_HTTP_PORT=9030
+      - CONTINUITY_HTTP_PATH=/mcp
+      # 引擎在同机同网络, 用容器名。
+      - SD_SERVER=http://sd_server:9020
+      - AUDIO_SERVER=http://audiocpp_server:9021
+      - CONTINUITY_STATE_DIR=/state
+      - MAX_IMAGE_SIZE=1024
+      - ENGINE_WAIT_S=180        # 引擎冷启动要从磁盘重读十几 GB 权重
+      - AUDIO_IDLE_UNLOAD_S=120  # 空闲 120s 卸掉音频模型, 显卡回到零常驻
+      - RETENTION_DAYS=30        # generated/ 保留 30 天; actors/subjects 永不清理
+    volumes:
+      # actors/ (参考音) 和 subjects/ (定妆图) 不可复现 —— 重铸出来是另一个人/另一个箱子。
+      # 留在容器可写层里, 一次 docker compose up 重建就永久没了。必须落宿主机。
+      - ./continuity-state:/state
+      # rembg 模型缓存。不挂的话每次重建容器都要重新下 ~214 MB。
+      - ./continuity-cache:/cache
+    depends_on:
+      - sd-server
+      - audiocpp-server
+    restart: unless-stopped
