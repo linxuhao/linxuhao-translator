@@ -185,6 +185,30 @@ def _new_name(prefix, ext):
     return f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
 
 
+def _http_detail(he, tag):
+    """引擎的错误正文才是有用的那部分: str(HTTPError) 只有 'HTTP Error 400: Bad Request',
+    agent 拿到它什么都做不了。正文只能 read 一次, 且不保证是 UTF-8。"""
+    try:
+        raw = he.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        raw = ""
+    detail = raw
+    if raw[:1] == "{":
+        try:
+            d = json.loads(raw)
+            for k in ("error", "message", "detail"):
+                v = d.get(k)
+                if isinstance(v, dict):
+                    v = v.get("message") or v.get("detail")
+                if v:
+                    detail = str(v)
+                    break
+        except Exception:
+            pass
+    detail = " ".join(detail.split())[:500]
+    return f"{tag}: HTTP {he.code} {detail or he.reason}"
+
+
 def _http(req, timeout, tag, retry_s=0.0):
     """引擎冷启动时会拒连: sd_server 要读 12.6 GB 权重, 宿主机重启后 page cache 是冷的,
     可能要几十秒才 listen。对连接错误重试, 对 HTTP 错误立即失败 (那是真错)。"""
@@ -194,8 +218,8 @@ def _http(req, timeout, tag, retry_s=0.0):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read())
-        except urllib.error.HTTPError:
-            raise
+        except urllib.error.HTTPError as he:
+            raise RuntimeError(_http_detail(he, tag)) from he
         except (urllib.error.URLError, ConnectionError, OSError) as e:
             if time.time() >= deadline:
                 raise RuntimeError(f"{tag} 不可达 (已重试 {retry_s:.0f}s): {e}") from e
@@ -243,9 +267,17 @@ def _check_audio(path):
 
 
 # ---- 任务队列 (单 worker 串行) ----
+JOB_RETENTION_S = float(os.getenv("JOB_RETENTION_S", "3600"))
 _jobs = {}
 _job_queue = queue.Queue()
 _job_lock = threading.Lock()
+
+
+def _reap_jobs():
+    """已结束的作业留够客户端取走的时间就删掉 —— 否则 _jobs 无界增长。调用方须持 _job_lock。"""
+    cutoff = time.time() - JOB_RETENTION_S
+    for jid in [j for j, v in _jobs.items() if v.get("done_at", float("inf")) < cutoff]:
+        del _jobs[jid]
 
 
 def _sd_generate(job, prompt, ref_b64=None):
@@ -542,11 +574,11 @@ def _worker():
             out = _RUNNERS[job["type"]](job)
             name, meta = out if isinstance(out, tuple) else (out, None)
             with _job_lock:
-                _jobs[job_id].update(status="done", file=name, meta=meta)
+                _jobs[job_id].update(status="done", file=name, meta=meta, done_at=time.time())
         except Exception as e:
             log.exception("job %s failed", job_id)
             with _job_lock:
-                _jobs[job_id].update(status="failed", error=str(e))
+                _jobs[job_id].update(status="failed", error=str(e), done_at=time.time())
         finally:
             _audio_state["last_use"] = time.time()   # 空闲计时从任务结束算起
             _busy.clear()
@@ -690,6 +722,7 @@ async def submit_job(req: JobRequest):
             clamped = {"audio_end_in_s": job["audio_end_in_s"]}
     job_id = uuid.uuid4().hex
     with _job_lock:
+        _reap_jobs()
         _jobs[job_id] = {"status": "queued", "file": None, "error": None, "meta": None}
     _job_queue.put((job_id, job))
     return {"job_id": job_id, "clamped": clamped}
@@ -985,12 +1018,14 @@ def _trim(frame):
 
 
 class RemoveBgRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     image: str                      # base64 原图
     mode: str = "auto"              # auto / checker / rembg
     quality: str = "best"           # best = birefnet-general-lite / fast = u2netp
 
 
 class SliceSheetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     image: str                      # base64 原图
     rows: int | None = None
     cols: int | None = None
@@ -1222,6 +1257,7 @@ def _write_wav(path, x):
 
 
 class SfxRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     preset: str = "select"
     seed: int | None = None                 # 固定 seed -> 逐字节可复现
     overrides: dict | None = None           # 覆盖 SfxParams 的任意字段
