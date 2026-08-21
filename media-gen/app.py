@@ -284,8 +284,24 @@ def _ref_b64(path):
         return base64.b64encode(f.read()).decode()
 
 
+def _release_for_image():
+    """生图前把音频模型全卸掉。
+
+    音频引擎的显存是"用过就留着"的, 而生图不会去动它 —— 实测交替调用
+    (配一句台词, 画一张图, 再配一句...) 峰值 10.94 GiB, 而单独生图只要 6.79。
+    加上这张卡上还有 ASR 常驻的 4 GiB, 整机实测冲到 14.43/16.00 —— 离挂只差 1.6 GiB,
+    而今天已经因为显存打满挂过三次。
+    卸掉之后峰值恒等于单个最大模型, 与调用顺序无关。
+    代价: 紧跟在生图后面的那次配音要重载, 4.8s 而不是 1.2s。连着配十句只付一次
+    (实测第 1 句 4.63s, 之后九句平均 1.19s)。
+    """
+    if _audio_state["loaded"]:
+        _unload_all_audio("为生图腾显存")
+
+
 def _run_image(job):
     t = time.time()
+    _release_for_image()
     ref, prompt = job.get("image"), job["prompt"]
     subject = job.get("subject")
     if subject:
@@ -310,6 +326,7 @@ def _run_image(job):
 def _run_subject_create(job):
     """定妆: 生成一张参考图存成 subject。和铸声一样走任务队列 —— 它要用 GPU。"""
     t = time.time()
+    _release_for_image()
     name, kind = job["subject"], job.get("kind") or DEFAULT_SUBJECT_KIND
     png, meta_path = _subject_paths(name)
     prompt = f'{job["prompt"]}, {SUBJECT_FRAMING[kind]}'
