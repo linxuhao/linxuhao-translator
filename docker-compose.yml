@@ -165,7 +165,11 @@ services:
   # GPU 1: ggml/Vulkan 推理引擎 (常驻, 模型不重载)
   # ROCm 在这张卡上 VAE 解码静默算错且非确定 —— 见 ROCm/ROCm#6633。
   # Vulkan/RADV 走运行时编译的 SPIR-V, 不查 per-gfx 预编译 kernel 表, 结果正确且更快。
-  # 二进制与权重在仓库外 (体积大), 构建方式见 media-gen/README-vulkan.md。
+  #
+  # 二进制在镜像里 (engines/Dockerfile 从钉死的 ref 在镜像内 clone + 编译), 仓库外
+  # 只剩权重。在这之前二进制是宿主机手工编的、由这里挂进来 —— 那让
+  # "新机器上 docker compose up -d" 是假的: 挂载点在新机器上根本不存在。
+  # 权重 22 GB 进不了 git, 所以仍然挂宿主机, 路径见 .env.example 的两个 *_WEIGHTS_DIR。
   # ==========================================
   sd-server:
     build:
@@ -179,10 +183,9 @@ services:
       - "44"
       - "992"
     volumes:
-      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/stable-diffusion.cpp:/work:ro
-      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/sdmodels2:/models/sd:ro
+      - ${SD_WEIGHTS_DIR:-/home/linxuhao/audiocpp/sdmodels2}:/models/sd:ro
     command: >
-      /work/build/bin/sd-server
+      sd-server
       --diffusion-model /models/sd/flux-2-klein-4b-Q8_0.gguf
       --vae /models/sd/flux2-vae.safetensors
       --llm /models/sd/qwen_3_4b.safetensors
@@ -203,14 +206,15 @@ services:
       - "44"
       - "992"
     volumes:
-      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/audio.cpp:/work:ro
-      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/models:/models/audio:ro
+      - ${AUDIO_WEIGHTS_DIR:-/home/linxuhao/audiocpp/models}:/models/audio:ro
+      # 这份配置和上游 deploy/audio_server.json.tmpl 逐字等价 (它的 __DEVICE__ = 1),
+      # 所以镜像换成自带二进制之后照用, 不需要改。三个模型路径都是 /models/audio/*。
       - ./media-gen/audio_server.json:/conf/audio_server.json:ro
       # 曾经挂过 ./actors:/actors:ro —— 那时克隆走 /v1/tasks/run, 参考音的路径由引擎
       # 自己解析, 所以两边必须看见同一个目录。现在走 /v1/audio/speech 传 base64,
       # 引擎不再碰文件系统, 这也是跨机克隆能成立的原因。
     command: >
-      /work/build/linux-vulkan-release/bin/audiocpp_server
+      audiocpp_server
       --config /conf/audio_server.json --no-ui
     restart: unless-stopped
 
