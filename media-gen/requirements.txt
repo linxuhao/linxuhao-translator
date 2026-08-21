@@ -5,3 +5,7 @@ numpy
 pillow
 rembg
 onnxruntime
+# MCP 客户端 —— 壳靠它跟 continuity 说话。钉死版本: 本文件的代码依赖 2.x 的
+# snake_case 字段 (output_schema / structured_content) 和 streamable_http_client
+# 的双值返回, 而这些在 1.x 里是另一套名字。
+mcp==2.0.0

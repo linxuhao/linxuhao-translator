@@ -142,8 +142,22 @@ services:
       - "44"    # video
       - "992"   # render
     environment:
+      - CONTINUITY_MCP_URL=http://continuity_mcp:9030/mcp
+      # /health 回报的 device 字段; 壳自己不碰显卡, 这个值只是转述本机怎么配的
       - VULKAN_DEVICE=1     # 1 = RX 7800 XT (RADV NAVI32); 0 = 7900 XTX, 被 vllm 占用
+      # ⚠️ 【限值耦合】下面四个上限 continuity 那边也有一份 (见本文件 continuity 段 +
+      # 它的 config.py)。壳必须知道它们, 因为 `clamped` 是 POST /v1/jobs 同步返回的 ——
+      # 那一刻任务还没跑, 拿不到 continuity 的结果, 只能自己按请求算。
+      # 两边不一致 = 算出来的 clamped 是错的, 而且没有任何一层会报错。改一边必须改另一边。
       - MAX_IMAGE_SIZE=1024
+      - MAX_AUDIO_SECONDS=120
+      - MAX_SPEECH_CHARS=200
+      - MAX_SAMPLE_CHARS=45
+      # ↓↓↓ 以下全是给回滚留的, 壳一个都不读 ↓↓↓
+      # 回滚路径是 `git checkout media-gen/app.py && docker compose restart media-gen` ——
+      # restart 用的是容器现有的配置, 不重读本文件。所以旧 app.py 要的东西 (两个引擎地址、
+      # /generated /actors /subjects 三个挂载、/dev/dri) 必须还在, 否则回滚回去起不来。
+      # 壳稳定之后单独一轮删掉它们。
       - SD_SERVER=http://sd_server:9020
       - AUDIO_SERVER=http://audiocpp_server:9021
       - ENGINE_WAIT_S=180      # 引擎冷启动要从磁盘重读 12.6 GB 权重
@@ -151,11 +165,20 @@ services:
       - RETENTION_DAYS=30      # 生成产物保留 30 天, 0 = 不清理
     volumes:
       - ./media-gen/app.py:/app/app.py
+      # continuity 的状态目录, 只读 —— 三条下载路径 (/files/, /v1/actors/{n}/audio,
+      # /v1/subjects/{n}/image) 直接从这里发文件。写入一律走 MCP, 所以是 :ro。
+      - ./continuity-state:/state:ro
+      # 三处 base64 入参在 MCP 那边是"本机路径"参数, 得落到两个容器都看得见的地方。
+      # 同一个宿主机目录在 continuity 那边是 /state/_shell_tmp (它的 /state 是可写的),
+      # 这样不用去动 continuity 那一段的挂载。
+      - ./continuity-state/_shell_tmp:/shell_tmp
+      # ↓↓↓ 回滚用, 壳不读 (见上) ↓↓↓
       - ./generated:/generated
-      # 角色参考音: 长期资产, 和有 30 天清理的 ./generated 分开放
       - ./actors:/actors
       - ./subjects:/subjects
     depends_on:
+      - continuity
+      # ↓ 回滚用 (旧 app.py 直接打这两个引擎)
       - sd-server
       - audiocpp-server
     restart: unless-stopped
@@ -241,6 +264,9 @@ services:
       - SD_SERVER=http://sd_server:9020
       - AUDIO_SERVER=http://audiocpp_server:9021
       - CONTINUITY_STATE_DIR=/state
+      # 参考音上限。continuity 的默认是 15s (为小显存机器调的), 而 media-gen 一直是 30s ——
+      # 不设这一行, 15~30 秒的参考音会从"能导入"变成 400, 是一次静默的行为回归。
+      - CONTINUITY_REF_MAX_S=30
       - MAX_IMAGE_SIZE=1024
       - ENGINE_WAIT_S=180        # 引擎冷启动要从磁盘重读十几 GB 权重
       - AUDIO_IDLE_UNLOAD_S=120  # 空闲 120s 卸掉音频模型, 显卡回到零常驻
