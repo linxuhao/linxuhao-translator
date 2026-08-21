@@ -135,12 +135,7 @@ services:
     container_name: media_gen
     ports:
       - "9010:9010"
-    devices:
-      # Vulkan 只需要 /dev/dri; /dev/kfd 是 ROCm 的计算接口, 已不再使用
-      - "/dev/dri:/dev/dri"
-    group_add:
-      - "44"    # video
-      - "992"   # render
+    # 没有 devices / group_add: 壳一行 GPU 代码都不跑, 生图配音全在 continuity 那边。
     environment:
       - CONTINUITY_MCP_URL=http://continuity_mcp:9030/mcp
       # /health 回报的 device 字段; 壳自己不碰显卡, 这个值只是转述本机怎么配的
@@ -153,16 +148,6 @@ services:
       - MAX_AUDIO_SECONDS=120
       - MAX_SPEECH_CHARS=200
       - MAX_SAMPLE_CHARS=45
-      # ↓↓↓ 以下全是给回滚留的, 壳一个都不读 ↓↓↓
-      # 回滚路径是 `git checkout media-gen/app.py && docker compose restart media-gen` ——
-      # restart 用的是容器现有的配置, 不重读本文件。所以旧 app.py 要的东西 (两个引擎地址、
-      # /generated /actors /subjects 三个挂载、/dev/dri) 必须还在, 否则回滚回去起不来。
-      # 壳稳定之后单独一轮删掉它们。
-      - SD_SERVER=http://sd_server:9020
-      - AUDIO_SERVER=http://audiocpp_server:9021
-      - ENGINE_WAIT_S=180      # 引擎冷启动要从磁盘重读 12.6 GB 权重
-      - AUDIO_IDLE_UNLOAD_S=120   # 空闲 120s 后卸掉音频模型, 显卡回到零常驻
-      - RETENTION_DAYS=30      # 生成产物保留 30 天, 0 = 不清理
     volumes:
       - ./media-gen/app.py:/app/app.py
       # continuity 的状态目录, 只读 —— 三条下载路径 (/files/, /v1/actors/{n}/audio,
@@ -172,15 +157,8 @@ services:
       # 同一个宿主机目录在 continuity 那边是 /state/_shell_tmp (它的 /state 是可写的),
       # 这样不用去动 continuity 那一段的挂载。
       - ./continuity-state/_shell_tmp:/shell_tmp
-      # ↓↓↓ 回滚用, 壳不读 (见上) ↓↓↓
-      - ./generated:/generated
-      - ./actors:/actors
-      - ./subjects:/subjects
     depends_on:
       - continuity
-      # ↓ 回滚用 (旧 app.py 直接打这两个引擎)
-      - sd-server
-      - audiocpp-server
     restart: unless-stopped
 
   # ==========================================
@@ -228,8 +206,9 @@ services:
       - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/audio.cpp:/work:ro
       - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/models:/models/audio:ro
       - ./media-gen/audio_server.json:/conf/audio_server.json:ro
-      # voice_ref 的路径由引擎解析, 所以它也要看得见同一个 /actors
-      - ./actors:/actors:ro
+      # 曾经挂过 ./actors:/actors:ro —— 那时克隆走 /v1/tasks/run, 参考音的路径由引擎
+      # 自己解析, 所以两边必须看见同一个目录。现在走 /v1/audio/speech 传 base64,
+      # 引擎不再碰文件系统, 这也是跨机克隆能成立的原因。
     command: >
       /work/build/linux-vulkan-release/bin/audiocpp_server
       --config /conf/audio_server.json --no-ui

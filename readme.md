@@ -82,6 +82,41 @@ docker compose up -d
 
 > The first boot takes a while as it downloads the `Qwen3-ASR-1.7B` and `Qwen3.6-27B` models into `~/.cache/huggingface`.
 
+#### Media generation depends on a published package
+
+`media-gen` is a **thin shell** (~780 lines). It serves the same 16 HTTP endpoints it always
+has, but every generation, asset store, and VRAM decision is delegated over **MCP-over-HTTP**
+to the `continuity` service, which runs [`dsh-continuity`](https://pypi.org/project/dsh-continuity/)
+from PyPI:
+
+```
+mcp-server ──HTTP :9010──▶ media-gen (shell) ──MCP :9030──▶ continuity ──HTTP──▶ sd-server :9020
+                                     │                     (dsh-continuity)      audiocpp-server :9021
+                                     └── reads ./continuity-state (:ro) to serve /files/
+```
+
+Three consequences worth knowing before you deploy:
+
+* **The version is pinned on purpose.** `continuity/Dockerfile` installs an exact
+  `dsh-continuity==X.Y.Z`. The shell is written against that release's 20 MCP tools and their
+  `outputSchema`; a floating version would silently change this service's contract. To upgrade,
+  bump the `ARG` and `docker compose build continuity`.
+* **`continuity` does not own any weights.** It is pointed at this repo's own `sd-server` and
+  `audiocpp-server` (`SD_SERVER` / `AUDIO_SERVER`). The package ships its own installer
+  (`continuity-setup`) that would build engines and download ~18 GB — **do not run it here**;
+  this deployment is the bring-your-own-backend path.
+* **Port 9030 is deliberately not published.** The MCP server has no authentication and its
+  tools can write to disk and delete actors/subjects. It is reachable only from the compose
+  network.
+
+`docker compose up -d` handles the ordering — `media-gen` declares `depends_on: continuity`,
+and `continuity` declares `depends_on: [sd-server, audiocpp-server]`. Note that `depends_on`
+waits for *start*, not readiness; `continuity` retries a cold engine for `ENGINE_WAIT_S`
+(180 s by default), which covers `sd-server` re-reading 12.6 GB of weights from disk.
+
+Durable assets (cloned voice references, pinned character sheets) live in
+`./continuity-state/` on the host — **they are not reproducible, so back them up.**
+
 > On non-AMD hardware you'll need to adapt the image/devices to your GPU — see [Hardware Support](#hardware-support). An experimental auto-installer that generates this compose file for you is also documented there.
 
 ### Access the UI
