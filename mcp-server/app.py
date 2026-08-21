@@ -157,16 +157,24 @@ async def convert_to_wav(audio_bytes: bytes) -> bytes:
 
 @mcp.custom_route("/upload/audio", methods=["POST"])
 async def upload_audio(request: Request) -> JSONResponse:
-    """上传音频文件，自动转换为 WAV，返回 file_id"""
+    """上传音频，原样存下，返回 file_id。
+
+    这里刻意不转码。原先上传时就转成 16 kHz 单声道 (ASR 的规格) 并只存转码后的结果,
+    有两个后果:
+      - 对 ASR 是白做的 —— transcribe_audio 本来就会再调一次 convert_to_wav。
+      - 对 import_actor 是有损的 —— 克隆参考音要 24 kHz, 而拿到的已经是 16 kHz,
+        media-gen 再从 16k 升到 24k 也补不回被丢掉的那个倍频程。而它会"导入成功"、
+        报一个像模像样的格式, 只是音色比你上传的那份闷。
+    各自需要什么格式, 由各自去转。
+    """
     form = await request.form()
     file = form.get("file")
     if not file:
         return JSONResponse({"error": "no file"}, status_code=400)
     content = await file.read()
-    wav_data = await convert_to_wav(content)
     file_id = str(uuid.uuid4())
-    file_storage[file_id] = wav_data
-    return JSONResponse({"file_id": file_id, "size": len(wav_data)})
+    file_storage[file_id] = content
+    return JSONResponse({"file_id": file_id, "size": len(content)})
 
 
 @mcp.custom_route("/upload/image", methods=["POST"])
@@ -890,6 +898,14 @@ async def import_actor(name: str, transcript: str, audio_base64: str = None,
     data, err = await _resolve_audio_bytes(audio_base64, audio_file_id, audio_url)
     if err:
         return err
+    lowband = None
+    try:
+        import wave as _w, io as _io
+        with _w.open(_io.BytesIO(data)) as _f:
+            if _f.getframerate() < 24000:
+                lowband = _f.getframerate()
+    except Exception:
+        pass
     payload = {"actor": name, "audio": base64.b64encode(data).decode(),
                "transcript": transcript, "force": force}
     async with httpx.AsyncClient(timeout=MEDIA_GEN_TIMEOUT) as client:
@@ -897,9 +913,11 @@ async def import_actor(name: str, transcript: str, audio_base64: str = None,
     d = r.json()
     if r.status_code >= 400:
         return f"导入失败: {d.get('error', r.text[:300])}"
+    warn = (f"\n⚠️ 这段录音只有 {lowband} Hz, 低于克隆用的 24 kHz。升采样补不回丢掉的高频, "
+            f"音色会比原声闷。有更高采样率的原始文件就换那个。") if lowband else ""
     return (f"角色 '{d['actor']}' 已从录音铸声 ({d['source_format']})。"
             f"参考音: {MEDIA_GEN_PUBLIC_URL}{d['reference_url']} —— "
-            f"先用 actor_tts 试一句, 确认克隆出来的音色对不对。")
+            f"先用 actor_tts 试一句, 确认克隆出来的音色对不对。{warn}")
 
 
 @mcp.tool()
