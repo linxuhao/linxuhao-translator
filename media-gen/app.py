@@ -70,6 +70,12 @@ DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "A neutral adult narrator, clear and 
 # 200 字取在已知安全值 (402) 的一半, 而且 200 字已经是 45 秒旁白 ——
 # 游戏里一句 NPC 台词通常 10~40 字, 这个上限不会碰到。更长的文本请分多次调用。
 MAX_SPEECH_CHARS = int(os.getenv("MAX_SPEECH_CHARS", "200"))
+# 铸声台词单独一个上限, 不跟着 MAX_SPEECH_CHARS 走。后者管"说一句台词"(200 字/45 秒),
+# 而铸声产出的是参考音, 它会被之后每一句台词反复吃进显存: 200 字铸出来是 45 秒参考音,
+# 那之后每句话都要付 11 GiB 以上 (实测 0.19 GiB/秒)。
+# 字数只是代理指标而且不准 —— 实测 60 字铸出来是 19.1 秒, 不是按 200 字/45 秒折算的
+# 13.7 秒。所以卡在 45 字, 并在铸完之后按真实时长再复核一次。
+MAX_SAMPLE_CHARS = int(os.getenv("MAX_SAMPLE_CHARS", "45"))
 # 字数上限只挡住"输入长", 挡不住"输出跑飞": 引擎默认 max_tokens=2048 (~170 s 音频),
 # 一句短台词一旦退化成循环, 照样能生成几分钟并拖挂 GPU。按字数推 token 预算,
 # 让跑飞的请求早早自己停下。实测 ~2.7 token/字, 取 4.0 留余量。
@@ -231,7 +237,9 @@ def _check_audio(path):
     dbfs = 20 * np.log10(rms) if rms > 0 else -999.0
     if dbfs < MIN_AUDIO_RMS_DBFS:
         raise ValueError(f"degenerate audio: rms={dbfs:.1f} dBFS < {MIN_AUDIO_RMS_DBFS}")
-    log.info("audio ok: %s %.1fs rms=%.1f dBFS", os.path.basename(path), n / w.getframerate(), dbfs)
+    secs = n / w.getframerate()
+    log.info("audio ok: %s %.1fs rms=%.1f dBFS", os.path.basename(path), secs, dbfs)
+    return secs
 
 
 # ---- 任务队列 (单 worker 串行) ----
@@ -448,20 +456,29 @@ def _run_actor_create(job):
     os.makedirs(ACTORS_DIR, exist_ok=True)
     with open(wav_path, "wb") as f:
         f.write(audio)
-    _check_audio(wav_path)          # 退化的参考音会污染这个角色的每一句台词
+    secs = _check_audio(wav_path)   # 退化的参考音会污染这个角色的每一句台词
     meta = {
         "name": name,
         "voice": job["instruct"],
         "transcript": text,          # Base 克隆要参考音的文字, 而这段是我们自己生成的
         "reference_path": wav_path,  # 引擎和本服务挂的是同一个 /actors
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "ref_seconds": round(secs, 1),
         "seed": job.get("seed"),
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
-    log.info("[actor] 铸声 %s 完成 (%.1fs, rtf=%s)", name, time.time() - t, tm.get("rtf"))
-    return None, {"actor": name, "transcript": text,
-                  "reference_url": f"/v1/actors/{name}/audio"}
+    log.info("[actor] 铸声 %s 完成 (%.1fs, 参考音 %.1fs, rtf=%s)",
+             name, time.time() - t, secs, tm.get("rtf"))
+    out = {"actor": name, "transcript": text, "ref_seconds": round(secs, 1),
+           "reference_url": f"/v1/actors/{name}/audio"}
+    if secs > REF_MAX_S:
+        # 不重铸也不失败: 这段参考音本身是好的, 只是之后每句台词都会比必要的贵。
+        out["warning"] = (
+            f"这段参考音 {secs:.1f}s, 超过上限 {REF_MAX_S:.0f}s。能用, 但之后每一句台词"
+            f"都要多付显存 (约 0.19 GiB/秒)。用更短的 sample_text 重铸一次即可 —— "
+            f"3~10 秒足够定住音色。")
+    return None, out
 
 
 def _run_speech(job):
@@ -632,9 +649,10 @@ async def submit_job(req: JobRequest):
                 status_code=409)
         job["actor"] = name
         text = (req.prompt or "").strip() or DEFAULT_SAMPLE_TEXT
-        job["prompt"] = text[:MAX_SPEECH_CHARS]
-        if len(text) > MAX_SPEECH_CHARS:
-            clamped = {"prompt_chars": MAX_SPEECH_CHARS}
+        job["prompt"] = text[:MAX_SAMPLE_CHARS]
+        if len(text) > MAX_SAMPLE_CHARS:
+            clamped = {"prompt_chars": MAX_SAMPLE_CHARS,
+                       "why": "铸声台词越长, 参考音越长, 之后每一句台词的显存代价越高"}
     elif req.type == "speech":
         text = req.prompt.strip()
         if not text:
@@ -1273,6 +1291,159 @@ async def actor_audio(name: str):
     if not os.path.isfile(wav):
         return JSONResponse({"error": f"actor '{safe}' 不存在"}, status_code=404)
     return FileResponse(wav)
+
+
+
+# ---- 导入外部素材 ----
+# 定妆/铸声的本质是"一份参考产物 + 一段描述", 参考产物是我们自己生成的还是别处来的
+# 并不重要。所以导入走的是同一条路, 只把生成那一步换成校验 + 落盘 —— 用户在别处
+# 做好的角色 (真人录音 / 其它 TTS / 别的画图工具) 照样能在这里保持一致。
+# 纯 CPU, 不排队: 和抠图一样不碰 GPU, 没理由排在一次 15s 生图后面。
+REF_RATE = 24000                       # 克隆参考音的采样率
+# 参考音时长直接换成显存 —— 克隆时它要进模型, 实测 (基线 ~3 GiB + 约 0.19 GiB/秒):
+#     5s 3.92   8s 4.58   12s 5.50   15s 6.59   18s 7.31   20s 7.58   30s 9.04 GiB
+# 这张卡 16 GiB, 30s 放得下; 8 GiB 的卡要压到 15s (那是最后一个还低于生图峰值
+# 6.80 GiB 的档)。而参考音并非越长越好 —— 3~10 秒就足够定住音色。
+REF_MIN_S = float(os.getenv("REF_MIN_S", "2"))
+REF_MAX_S = float(os.getenv("REF_MAX_S", "30"))
+
+
+def _normalize_ref_wav(data, dst):
+    """把任意 WAV 转成 24 kHz 单声道 16-bit —— 参考音的规格。
+
+    自己转而不是要求调用方转: 用户手上的素材大多是 44.1k 立体声, 而"格式不对"在引擎
+    那边的表现是音色古怪或直接失败, 都不会说是采样率的事。线性重采样对一段人声参考音
+    足够。非 WAV 由 mcp-server 那边用 ffmpeg 先转好。
+    """
+    with wave.open(io.BytesIO(data)) as w:
+        ch, width, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+        raw = w.readframes(n)
+    if width != 2:
+        raise ValueError(f"参考音必须是 16-bit PCM WAV (这个是 {width * 8}-bit)")
+    x = np.frombuffer(raw, dtype="<i2").astype(np.float32)
+    if ch > 1:
+        x = x.reshape(-1, ch).mean(axis=1)
+    secs = x.size / rate
+    if secs < REF_MIN_S:
+        raise ValueError(f"参考音只有 {secs:.1f}s, 至少要 {REF_MIN_S:.0f}s —— 太短克隆不出音色")
+    if secs > REF_MAX_S:
+        # 刻意不自动截断: 图片缩小仍是同一张图, 而音频截掉后半段之后 transcript
+        # 描述的就不再是这段音频了, 而音文对齐正是克隆的依据 —— 会得到一个
+        # "导入成功"但音色不对的角色, 比报错糟糕得多。
+        raise ValueError(
+            f"参考音 {secs:.1f}s, 上限 {REF_MAX_S:.0f}s。不替你截断: 截了之后 transcript "
+            f"描述的就不是这段音频了, 而音文对齐正是克隆的依据。请自己剪一段 "
+            f"{REF_MIN_S:.0f}~{REF_MAX_S:.0f}s 的并给出对应文字 (3~10 秒就够), "
+            f"例如 ffmpeg -i 原文件 -t {REF_MAX_S:.0f} -acodec pcm_s16le -ac 1 -ar 24000 ref.wav。"
+            f"上限来自显存: 参考音每秒约 0.19 GiB")
+    if rate != REF_RATE:
+        m = int(round(x.size * REF_RATE / rate))
+        x = np.interp(np.linspace(0, x.size - 1, m), np.arange(x.size), x)
+    pcm = np.clip(np.round(x), -32768, 32767).astype("<i2")
+    with wave.open(dst, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(REF_RATE)
+        w.writeframes(pcm.tobytes())
+    return secs, rate, ch
+
+
+class ImportActorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actor: str
+    audio: str                      # base64 的 16-bit PCM WAV
+    transcript: str                 # 录音里念的是什么 —— 克隆模型要拿它对齐
+    force: bool = False
+
+
+class ImportSubjectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    subject: str
+    image: str                      # base64 图片
+    appearance: str                 # 会被拼进之后每一张场景图的提示词
+    kind: str = DEFAULT_SUBJECT_KIND
+    force: bool = False
+
+
+@app.post("/v1/actors/import")
+def import_actor(req: ImportActorRequest):
+    name = (req.actor or "").strip()
+    if not _ACTOR_NAME_RE.match(name):
+        return JSONResponse({"error": "actor 名只能是字母/数字/下划线/连字符/中文, 1~40 字"},
+                            status_code=400)
+    if not (req.transcript or "").strip():
+        return JSONResponse({"error": "必须给 transcript —— 那段录音里念的是什么。"
+                                      "克隆模型要拿它对齐音频和文字, 写错了音色会明显不对。"},
+                            status_code=400)
+    if _load_actor(name) is not None and not req.force:
+        return JSONResponse({"error": f"actor '{name}' 已存在。覆盖会让它之前所有台词的"
+                                      f"音色对不上 —— 确实要换就传 force=true。"}, status_code=409)
+    wav_path, meta_path = _actor_paths(name)
+    os.makedirs(ACTORS_DIR, exist_ok=True)
+    try:
+        secs, rate, ch = _normalize_ref_wav(base64.b64decode(req.audio), wav_path)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"读不了这个 WAV: {e}"}, status_code=400)
+    try:
+        _check_audio(wav_path)
+    except ValueError as e:
+        os.remove(wav_path)
+        return JSONResponse({"error": f"这段录音没通过校验: {e}"}, status_code=400)
+    meta = {"name": name, "voice": "(导入的录音)", "transcript": req.transcript.strip(),
+            "reference_path": wav_path, "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "source_format": f"{rate} Hz / {ch} ch / {secs:.1f}s", "imported": True}
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    log.info("[actor] 导入 %s 完成 (%s)", name, meta["source_format"])
+    return {"actor": name, "source_format": meta["source_format"],
+            "reference_url": f"/v1/actors/{name}/audio"}
+
+
+@app.post("/v1/subjects/import")
+def import_subject(req: ImportSubjectRequest):
+    name = (req.subject or "").strip()
+    if not _ACTOR_NAME_RE.match(name):
+        return JSONResponse({"error": "subject 名只能是字母/数字/下划线/连字符/中文, 1~40 字"},
+                            status_code=400)
+    if req.kind not in SUBJECT_FRAMING:
+        return JSONResponse({"error": f"kind 必须是 {'/'.join(SUBJECT_FRAMING)}"}, status_code=400)
+    if not (req.appearance or "").strip():
+        return JSONResponse({"error": "必须给 appearance —— 它会被拼进之后每一张场景图的"
+                                      "提示词。只有参考图而没有文字描述时, 模型对'这是什么'"
+                                      "没有着落, 外观照样会漂。"}, status_code=400)
+    if _load_subject(name) is not None and not req.force:
+        return JSONResponse({"error": f"subject '{name}' 已存在。覆盖会让它之前所有场景图的"
+                                      f"外观对不上 —— 确实要换就传 force=true。"}, status_code=409)
+    png, meta_path = _subject_paths(name)
+    os.makedirs(SUBJECTS_DIR, exist_ok=True)
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(req.image)))
+        w0, h0 = img.size
+        if max(w0, h0) > MAX_IMAGE_SIZE:
+            sc = MAX_IMAGE_SIZE / max(w0, h0)
+            img = img.resize((max(1, int(w0 * sc)), max(1, int(h0 * sc))), Image.LANCZOS)
+        # 存成 RGB: 带 alpha 的参考图交给引擎, 透明区会被当成黑色实心块
+        img.convert("RGB").save(png, format="PNG")
+    except Exception as e:
+        return JSONResponse({"error": f"读不了这张图: {e}"}, status_code=400)
+    try:
+        _check_image(png)
+    except ValueError as e:
+        os.remove(png)
+        return JSONResponse({"error": f"这张图没通过校验: {e}"}, status_code=400)
+    meta = {"name": name, "kind": req.kind, "appearance": req.appearance.strip(),
+            "prompt": req.appearance.strip(), "reference_path": png,
+            "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "source_size": f"{w0}x{h0}", "stored_size": f"{img.width}x{img.height}",
+            "resized": (img.width, img.height) != (w0, h0), "imported": True}
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    log.info("[subject] 导入 %s (%s) 完成, 原图 %dx%d", name, req.kind, w0, h0)
+    return {"subject": name, "kind": req.kind, "source_size": meta["source_size"],
+            "stored_size": meta["stored_size"], "resized": meta["resized"],
+            "reference_url": f"/v1/subjects/{name}/image"}
 
 
 @app.get("/health")

@@ -780,10 +780,11 @@ async def create_actor(name: str, voice: str, sample_text: str = None,
                                 "prompt": sample_text or "", "seed": seed, "force": force})
     if not r["ok"]:
         return f"铸声失败: {r['error']}"
-    return (f"角色 '{r.get('actor', name)}' 已铸声。"
+    warn = f"\n⚠️ {r['warning']}" if r.get("warning") else ""
+    return (f"角色 '{r.get('actor', name)}' 已铸声 (参考音 {r.get('ref_seconds')}s)。"
             f"试音: {MEDIA_GEN_PUBLIC_URL}{r.get('reference_url')} "
             f"(念的是: {r.get('transcript')})。"
-            f"先听一遍确认是不是你要的人, 不满意用 create_actor(..., force=True) 重铸。")
+            f"先听一遍确认是不是你要的人, 不满意用 create_actor(..., force=True) 重铸。{warn}")
 
 
 @mcp.tool()
@@ -831,6 +832,113 @@ async def _resolve_image_b64(image_base64, image_file_id, image_url):
     if image_base64:
         return image_base64, None
     return None, "错误: 必须提供 image_base64、image_file_id 或 image_url"
+
+
+
+async def _resolve_audio_bytes(audio_base64, audio_file_id, audio_url):
+    """把三种音频入参统一成 16-bit PCM WAV 字节。非 WAV 用 ffmpeg 转成 24k 单声道。"""
+    if audio_file_id and audio_file_id in file_storage:
+        data = file_storage[audio_file_id]
+    elif audio_url:
+        if is_file_url(audio_url):
+            return None, "错误: audio_url 不能是本地文件路径，请先 POST /upload/audio 上传"
+        data = await download_url(audio_url)
+    elif audio_base64:
+        data = base64.b64decode(audio_base64)
+    else:
+        return None, "错误: 必须提供 audio_file_id、audio_url 或 audio_base64"
+    if data[:4] == b"RIFF":
+        return data, None
+    # 不是 WAV 就交给 ffmpeg。参考音要 24 kHz 单声道 —— 和克隆模型的规格一致
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", "pipe:0", "-ar", "24000", "-ac", "1",
+            "-acodec", "pcm_s16le", "-f", "wav", "pipe:1",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate(input=data)
+        if proc.returncode != 0 or not out:
+            return None, "错误: 这段音频 ffmpeg 解不开，换个格式试试 (wav/mp3/m4a/ogg/flac)"
+        return out, None
+    except FileNotFoundError:
+        return None, "错误: 服务器上没有 ffmpeg，请直接提供 16-bit PCM WAV"
+
+
+@mcp.tool()
+async def import_actor(name: str, transcript: str, audio_base64: str = None,
+                       audio_file_id: str = None, audio_url: str = None,
+                       force: bool = False) -> str:
+    """用一段现成的录音铸声 —— 声音是别处做的(真人录音 / 其它 TTS)也照样能保持一致。
+
+    和 create_actor 得到的东西完全一样, 只是参考音由你提供而不是我们生成。之后
+    actor_tts 让他说任意台词, 音色都来自这段录音。
+
+    参数:
+        name: 角色名, 之后 actor_tts 用它指代
+        transcript: 那段录音里念的是什么 —— 必填。克隆模型要拿它对齐音频和文字,
+                    写错了音色会明显不对。
+        audio_file_id: 通过 POST /upload/audio 上传后获得的 file_id (推荐)
+        audio_url: 音频的公开 URL
+        audio_base64: 或者直接给 base64
+        force: 覆盖已有角色
+
+    录音要求: 2~30 秒, 单人干净人声最好(没有背景音乐和混响)。wav/mp3/m4a/ogg/flac
+    都行, 服务端会转成 24 kHz 单声道。
+
+    注意: 你有权使用这段声音才导入它。克隆一个真人的嗓子在很多地方需要本人同意。
+    """
+    data, err = await _resolve_audio_bytes(audio_base64, audio_file_id, audio_url)
+    if err:
+        return err
+    payload = {"actor": name, "audio": base64.b64encode(data).decode(),
+               "transcript": transcript, "force": force}
+    async with httpx.AsyncClient(timeout=MEDIA_GEN_TIMEOUT) as client:
+        r = await client.post(f"{MEDIA_GEN_URL}/v1/actors/import", json=payload)
+    d = r.json()
+    if r.status_code >= 400:
+        return f"导入失败: {d.get('error', r.text[:300])}"
+    return (f"角色 '{d['actor']}' 已从录音铸声 ({d['source_format']})。"
+            f"参考音: {MEDIA_GEN_PUBLIC_URL}{d['reference_url']} —— "
+            f"先用 actor_tts 试一句, 确认克隆出来的音色对不对。")
+
+
+@mcp.tool()
+async def import_subject(name: str, appearance: str, kind: str = "character",
+                         image_base64: str = None, image_file_id: str = None,
+                         image_url: str = None, force: bool = False) -> str:
+    """用一张现成的图定妆 —— 角色/物件是别处画的也照样能保持一致。
+
+    和 create_character / create_animal / create_object 得到的东西完全一样, 只是定妆图
+    由你提供。之后 subject_image 让它出任意场景图, 外观都来自这张图。
+
+    参数:
+        name: 名字, 之后 subject_image 用它指代
+        appearance: 这是什么的文字描述 —— 必填, 它会被拼进之后每一张场景图的提示词。
+                    只给参考图而不给描述, 模型对"这是什么"没有着落, 外观照样会漂。
+                    写法同 create_character / create_animal / create_object 的要求。
+        kind: character / animal / object (只影响它被当成哪类东西记录)
+        image_file_id / image_url / image_base64: 同其它图片工具
+        force: 覆盖已有的
+
+    参考图要求和我们自己生成的定妆图一样: 单个主体、正面或四分之三视角、背景干净、
+    看得全。一张有场景有动作的插画当参考图, 场景会跟着一起被复制到每张图里。
+    大图会缩到 1024 以内; 带透明通道的图会转成 RGB(透明区交给引擎会变成黑块)。
+    """
+    img_b64, err = await _resolve_image_b64(image_base64, image_file_id, image_url)
+    if err:
+        return err
+    payload = {"subject": name, "image": img_b64, "appearance": appearance,
+               "kind": kind, "force": force}
+    async with httpx.AsyncClient(timeout=MEDIA_GEN_TIMEOUT) as client:
+        r = await client.post(f"{MEDIA_GEN_URL}/v1/subjects/import", json=payload)
+    d = r.json()
+    if r.status_code >= 400:
+        return f"导入失败: {d.get('error', r.text[:300])}"
+    size = (f"原图 {d['source_size']} → 存为 {d['stored_size']}"
+            if d.get("resized") else d["source_size"])
+    return (f"{d['kind']} '{d['subject']}' 已用现成图定妆 ({size})。"
+            f"定妆图: {MEDIA_GEN_PUBLIC_URL}{d['reference_url']} —— "
+            f"先用 subject_image 出一张试试, 确认外观跟得住。")
 
 
 @mcp.tool()
