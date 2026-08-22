@@ -59,6 +59,21 @@ JPEG_QUALITY = 95
 RESIZE_ENABLED = True  # True = resize if larger than MAX_IMAGE_PIXELS
 PDF_PAGE_DPI = 300  # Render PDF pages at 300 DPI (1100x3000px - tested to work with vLLM)
 
+# ---- vision_critique 的上下文预算 ----
+# vLLM 自己报的有效上下文, 不是 --max-model-len 那个参数 (它会被模型 config 压小)。
+# 出处: docker logs vllm_qwen -> "[model.py:1680] Using max model len 12288"
+#       (引擎配置行里同一个数写作 max_seq_len=12288)。换模型了就照着新日志改。
+VLLM_CONTEXT_TOKENS = int(os.getenv("VLLM_CONTEXT_TOKENS", "12288"))
+# Qwen3-VL 把图切成 16x16 patch 再 2x2 合并 —— 即每 32x32 像素 1 个 token, 外加 3 个
+# 包裹 token; 边长先按 32 四舍五入 (processor 的 smart_resize 就是这么算的)。
+# 2026-08-22 对 qwen3 (sokada4/Qwen3.8-27B-GPTQ-Int4) 实测逐个吻合, 且多图严格相加:
+#   960x704 -> 663   640x480 -> 303   320x240 -> 83   1280x960 -> 1203
+VISION_PATCH_PX = 32
+VISION_WRAP_TOKENS = 3
+VISION_MIN_PATCHES = 4       # 极小的图会被 processor 的 min_pixels 顶上来
+CHAT_OVERHEAD_TOKENS = 29    # 实测: 纯文本 "hi" 一次请求的 prompt_tokens
+VISION_SAFETY_TOKENS = 64    # 文本 token 估算误差的余量
+
 # File storage: LRU cache, max 50 entries, auto-evicts least-recently-used
 file_storage = LRUCache(maxsize=50)
 
@@ -103,6 +118,7 @@ mcp = FastMCP(
         "  remove_bg(image_url='...', mode?)  # 抠成真 RGBA (FLUX 画的棋盘格不是透明)\n"
         "  slice_sheet(image_url='...', rows=2, cols=2, trim?)  # 网格 sprite sheet 切单帧\n"
         "  vision_critique(prompt='...', image_url='...')  # 自定义提问的看图点评\n"
+        "    三个图片参数都兼收数组: 一次按顺序送多帧进去, 直接问差分问题 (这几帧之间 X 变没变)\n"
         "  gen_sfx(preset='jump', seed?)  # 程序化游戏音效 (sfxr 风格, 不用扩散模型)\n"
     ),
 )
@@ -235,7 +251,7 @@ async def call_asr(content: list) -> str:
         return resp.json()["choices"][0]["message"]["content"].strip()
 
 
-async def call_vllm(content: list, max_tokens: int = 2048) -> str:
+async def call_vllm(content: list, max_tokens: int = 2048, timeout: float = TIMEOUT) -> str:
     payload = {
         "model": "qwen3",
         "messages": [{"role": "system", "content": "<<DISABLE_THINKING>>"}, {"role": "user", "content": content}],
@@ -246,7 +262,7 @@ async def call_vllm(content: list, max_tokens: int = 2048) -> str:
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
 
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(VLLM_URL, json=payload, headers=headers)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
@@ -1028,42 +1044,138 @@ async def slice_sheet(image_base64: str = None, image_file_id: str = None, image
     return f"已切出 {len(urls)} 帧:\n" + "\n".join(urls)
 
 
+def _as_str_list(value) -> list:
+    """图片入参既收单个字符串, 也收字符串数组, 统一成 list。"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [v for v in value if v]
+
+
+def _image_token_cost(img: Image.Image) -> int:
+    """一张 (已 resize 过的) 图在 vLLM 里占多少 prompt token。
+
+    边长按 VISION_PATCH_PX 四舍五入成格子数, 乘起来就是图像 token 数, 再加包裹 token。
+    """
+    w, h = img.size
+    cols = max(1, round(w / VISION_PATCH_PX))
+    rows = max(1, round(h / VISION_PATCH_PX))
+    return max(cols * rows, VISION_MIN_PATCHES) + VISION_WRAP_TOKENS
+
+
+def _text_token_estimate(text: str) -> int:
+    """保守估算文本 token 数: CJK 一字一个, 其余 3 个字符算一个。"""
+    cjk = sum(1 for ch in text if "\u3400" <= ch <= "\u9fff" or "\uf900" <= ch <= "\ufaff")
+    return cjk + -(-(len(text) - cjk) // 3)
+
+
+def _vision_budget_error(costs: list, text_tokens: int, max_tokens: int):
+    """超预算就返回一段错误文本, 没超返回 None。
+
+    宁可报错也不截断: 少看了几帧还照样自信给结论的点评, 比不点评更糟。
+    """
+    fixed = CHAT_OVERHEAD_TOKENS + text_tokens + max_tokens + VISION_SAFETY_TOKENS
+    total = fixed + sum(costs)
+    if total <= VLLM_CONTEXT_TOKENS:
+        return None
+    room = VLLM_CONTEXT_TOKENS - fixed
+    fits = used = 0
+    for c in costs:
+        if used + c > room:
+            break
+        used += c
+        fits += 1
+    per = "/".join(str(c) for c in costs[:8]) + ("/..." if len(costs) > 8 else "")
+    lines = [
+        "错误: 超出 vLLM 上下文预算, 已中止 —— 没有丢掉任何一张图, 也没有让服务端截断。",
+        f"  上下文上限 {VLLM_CONTEXT_TOKENS} token",
+        f"  本次请求 ≈ {total} = 图 {len(costs)} 张 {sum(costs)} (每张 {per})"
+        f" + prompt {text_tokens} + max_tokens {max_tokens}"
+        f" + 固定开销 {CHAT_OVERHEAD_TOKENS} + 余量 {VISION_SAFETY_TOKENS}",
+    ]
+    if fits == 0:
+        lines.append(f"  按当前 prompt 和 max_tokens={max_tokens}, 一张都放不下。")
+    else:
+        lines.append(f"  按当前 prompt 和 max_tokens={max_tokens}, 最多放得下 {fits} 张"
+                     f" (即按给定顺序的前 {fits} 张)。")
+    lines.append("  要看更多帧: 分批调用, 或调小 max_tokens, 或把图缩小 (每 32x32 像素 1 token)。")
+    return "\n".join(lines)
+
+
 @mcp.tool()
-async def vision_critique(prompt: str, image_base64: str = None, image_file_id: str = None,
-                          image_url: str = None, max_tokens: int = 2048) -> str:
-    """用 Qwen3.6-27B 按你给的问题看图并作答 (画面点评/美术审查/构图判断)。
+async def vision_critique(prompt: str,
+                          image_base64: str | list[str] = None,
+                          image_file_id: str | list[str] = None,
+                          image_url: str | list[str] = None,
+                          max_tokens: int = 2048) -> str:
+    """用 Qwen3.8-27B 按你给的问题看图并作答; 可以一次给多张图 (画面点评/美术审查/多帧对比)。
 
     与 ocr_image 的区别: ocr_image 的指令写死成"抄写并校正文字", 本工具由调用方
     自己出题, 适合把游戏截帧丢进来问"主体够不够醒目 / 对比度够不够 / UI 有没有挡住画面"。
 
+    【多图】image_base64 / image_file_id / image_url 三个参数既收单个字符串, 也收字符串
+    数组。给数组时, 多张图**按数组给定的顺序**一起送进同一次对话 (每张前面标上
+    "Image i of N"), 所以可以直接问差分问题 —— 这才是多图的用处:
+      "这几帧之间血条变没变?"、"角色是从第几帧开始走出屏幕的?"、"哪一帧的构图最差?"
+    不用一张一张调完再自己汇总 —— 那样模型根本看不到帧与帧的差别。
+
     参数:
         prompt: 你要模型回答的问题 (英文效果最佳)
-        image_base64: base64 编码的图片
-        image_file_id: 通过 POST /upload/image 上传后获得的 file_id
-        image_url: 图片的 URL (必须是可访问的公开 URL)
-        max_tokens: 回答长度上限 (默认 2048)
+        image_base64: base64 编码的图片, 或 base64 数组
+        image_file_id: 通过 POST /upload/image 上传后获得的 file_id, 或 file_id 数组
+        image_url: 图片的 URL (必须是可访问的公开 URL), 或 URL 数组
+        max_tokens: 回答长度上限 (默认 2048); 它也要占上下文预算
 
     优先使用 image_file_id (最高效)，其次 image_url，直传 base64 最后。
+    三者只取一种 (按这个优先级), 不会把三个参数里的图拼在一起。
 
-    单图工具 (vLLM 上下文 12288)。要点评多帧就多调几次, 自己汇总。
+    【预算】vLLM 上下文 12288 token。一张图 ≈ 每 32x32 像素 1 token: 960x704 的游戏
+    截帧 = 663 token/张, 默认 max_tokens=2048 时大约放得下 15 张; 图越大放得越少
+    (长边超过 1700 px 会先被缩到 1700)。超预算直接报错并告诉你放得下几张 ——
+    绝不悄悄丢图, 也不让服务端截断。
     """
-    if image_file_id and image_file_id in file_storage:
-        img = Image.open(io.BytesIO(file_storage[image_file_id]))
-    elif image_url:
-        if is_file_url(image_url):
+    file_ids = _as_str_list(image_file_id)
+    urls = _as_str_list(image_url)
+    b64s = _as_str_list(image_base64)
+
+    if file_ids and all(f in file_storage for f in file_ids):
+        raws = [file_storage[f] for f in file_ids]
+    elif urls:
+        if any(is_file_url(u) for u in urls):
             return "错误: image_url 不能是本地文件路径，请使用 image_file_id 上传文件"
-        img = Image.open(io.BytesIO(await download_url(image_url)))
-    elif image_base64:
-        img = Image.open(io.BytesIO(base64.b64decode(image_base64)))
+        raws = [await download_url(u) for u in urls]
+    elif b64s:
+        raws = [base64.b64decode(b) for b in b64s]
+    elif file_ids:
+        missing = ", ".join(f for f in file_ids if f not in file_storage)
+        return (f"错误: 这些 image_file_id 不存在或已被 LRU 淘汰: {missing}。"
+                "请重新 POST /upload/image 上传。")
     else:
         return "错误: 必须提供 image_base64、image_file_id 或 image_url"
 
-    img_b64 = image_to_jpeg_base64(resize_image(img))
-    content = [
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-        {"type": "text", "text": prompt},
-    ]
-    return await call_vllm(content, max_tokens=max_tokens)
+    imgs = [resize_image(Image.open(io.BytesIO(raw))) for raw in raws]
+    n = len(imgs)
+
+    content, texts = [], []
+    for i, img in enumerate(imgs, 1):
+        if n > 1:
+            label = f"Image {i} of {n}:"
+            content.append({"type": "text", "text": label})
+            texts.append(label)
+        img_b64 = image_to_jpeg_base64(img)
+        content.append({"type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}})
+    content.append({"type": "text", "text": prompt})
+    texts.append(prompt)
+
+    err = _vision_budget_error([_image_token_cost(im) for im in imgs],
+                               _text_token_estimate("\n".join(texts)), max_tokens)
+    if err:
+        return err
+
+    # 多图 prefill 更长, 超时按张数放宽
+    return await call_vllm(content, max_tokens=max_tokens, timeout=TIMEOUT + 20.0 * (n - 1))
 
 
 @mcp.tool()
@@ -1248,7 +1360,8 @@ if __name__ == "__main__":
     print("  generate_music(prompt=..., seed?)")
     print("  remove_bg(image_base64?, image_file_id?, image_url?, mode?, quality?)")
     print("  slice_sheet(image_base64?, image_file_id?, image_url?, rows?, cols?, frame_width?, frame_height?, trim?)")
-    print("  vision_critique(prompt=..., image_base64?, image_file_id?, image_url?, max_tokens?)")
+    print("  vision_critique(prompt=..., image_base64?, image_file_id?, image_url?, max_tokens?)"
+          "  # 三个图片参数均可传单个或数组")
     print("  gen_sfx(preset=..., seed?, base_freq?, wave?, overrides?)")
     print("=" * 60)
 
