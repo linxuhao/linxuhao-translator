@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgomp1 ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-ARG DSH_CONTINUITY_VERSION=0.4.0
+ARG DSH_CONTINUITY_VERSION=0.5.0
 RUN pip install --no-cache-dir "dsh-continuity==${DSH_CONTINUITY_VERSION}"
 
 # rembg 首次抠图会去下载模型 (birefnet-general-lite ~214 MB)。不烤进镜像, 而是把
