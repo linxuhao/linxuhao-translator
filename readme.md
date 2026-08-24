@@ -98,7 +98,7 @@ mcp-server ──HTTP :9010──▶ media-gen (shell) ──MCP :9030──▶ 
 Three consequences worth knowing before you deploy:
 
 * **The version is pinned on purpose.** `continuity/Dockerfile` installs an exact
-  `dsh-continuity==X.Y.Z`. The shell is written against that release's 20 MCP tools and their
+  `dsh-continuity==X.Y.Z`. The shell is written against that release's 21 MCP tools and their
   `outputSchema`; a floating version would silently change this service's contract. To upgrade,
   bump the `ARG` and `docker compose build continuity`.
 * **`continuity` does not own any weights.** It is pointed at this repo's own `sd-server` and
@@ -129,13 +129,13 @@ is layer-cached. (It used to be the opposite: the binaries were compiled by hand
 host and bind-mounted in, which made `docker compose up -d` a lie on any machine but the
 one they were built on.)
 
-The **weights are not** in the image — ~22 GB, they stay on the host and are mounted
+The **weights are not** in the image — ~25 GB, they stay on the host and are mounted
 `:ro`. That is the one remaining manual step:
 
 ```bash
 pip install -U huggingface_hub
 
-# Downloads the 6 files into the layout compose expects. Already-present files are
+# Downloads the 7 files into the layout compose expects. Already-present files are
 # skipped, so it is safe to re-run as a verification pass.
 # Override SD_WEIGHTS_DIR / AUDIO_WEIGHTS_DIR to put them elsewhere (see .env.example).
 python3 - <<'PY'
@@ -158,6 +158,9 @@ WANT = [
     (AUDIO, "audio-cpp/audio.cpp-gguf",
      f"{Q}-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
      f"{Q}-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf"),
+    (AUDIO, "audio-cpp/audio.cpp-gguf",
+     "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
+     "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf"),
 ]
 for root, repo, remote, dest in WANT:
     d = root / dest

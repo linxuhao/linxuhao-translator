@@ -9,7 +9,7 @@
 #
 # libgomp1 是 onnxruntime 的运行时依赖 (缺了 import 就报 libgomp.so.1 找不到)。
 #
-# 版本钉死: dsh-continuity 的工具语义 (19 个工具的 outputSchema) 是调用方的契约,
+# 版本钉死: dsh-continuity 的工具语义 (21 个工具的 outputSchema) 是调用方的契约,
 # 浮动版本意味着某天 docker compose build 会静默换掉这套契约。
 # ==========================================
 FROM python:3.12-slim
@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgomp1 ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-ARG DSH_CONTINUITY_VERSION=0.3.2
+ARG DSH_CONTINUITY_VERSION=0.4.0
 RUN pip install --no-cache-dir "dsh-continuity==${DSH_CONTINUITY_VERSION}"
 
 # rembg 首次抠图会去下载模型 (birefnet-general-lite ~214 MB)。不烤进镜像, 而是把

@@ -208,7 +208,7 @@ services:
     volumes:
       - ${AUDIO_WEIGHTS_DIR:-/home/linxuhao/audiocpp/models}:/models/audio:ro
       # 这份配置和上游 deploy/audio_server.json.tmpl 逐字等价 (它的 __DEVICE__ = 1),
-      # 所以镜像换成自带二进制之后照用, 不需要改。三个模型路径都是 /models/audio/*。
+      # 所以镜像换成自带二进制之后照用, 不需要改。四个模型路径都是 /models/audio/*。
       - ./media-gen/audio_server.json:/conf/audio_server.json:ro
       # 曾经挂过 ./actors:/actors:ro —— 那时克隆走 /v1/tasks/run, 参考音的路径由引擎
       # 自己解析, 所以两边必须看见同一个目录。现在走 /v1/audio/speech 传 base64,
