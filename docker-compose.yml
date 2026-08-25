@@ -9,13 +9,6 @@ services:
     command: tunnel run
     environment:
       - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
-    networks:
-      # 两张网: default 用来够到本项目自己的服务 (gateway / mcp_server / …),
-      # cloudflare_edge 是给外部项目加入的会合点。别的项目不该为了被隧道
-      # 够到, 就被迫坐进本项目的默认网里 —— 那会顺带把 vllm、media-gen
-      # 这些也暴露给它们。
-      - default
-      - cloudflare_edge
 
   # ----------------------------------------
   # 调度中枢: API Gateway & PWA
@@ -24,6 +17,7 @@ services:
     build:
       context: ./gateway
     container_name: api_gateway
+    profiles: ["gateway"]
     ports:
       - "5000:5000"
     volumes:
@@ -43,6 +37,7 @@ services:
   vllm-qwen:
     image: vllm/vllm-openai-rocm:latest #for support of --reasoning-config, it gets dropped on latest nightly
     container_name: vllm_qwen
+    profiles: ["translator"]
     ports:
       - "8000:8000"
     devices:
@@ -81,6 +76,7 @@ services:
     build:
         context: ./qwen3-asr
     container_name: qwen3_asr
+    profiles: ["translator"]
     ports:
       - "9000:8000"
     devices:
@@ -115,6 +111,7 @@ services:
     build:
       context: ./mcp-server
     container_name: mcp_server
+    profiles: ["gateway"]
     ports:
       - "9003:9003"
     environment:
@@ -140,6 +137,7 @@ services:
     build:
       context: ./media-gen
     container_name: media_gen
+    profiles: ["media"]
     ports:
       - "9010:9010"
     devices:
@@ -177,6 +175,7 @@ services:
     build:
       context: ./engines
     container_name: sd_server
+    profiles: ["media"]
     ports:
       - "9020:9020"
     devices:
@@ -201,6 +200,7 @@ services:
     build:
       context: ./engines
     container_name: audiocpp_server
+    profiles: ["media"]
     ports:
       - "9021:9021"
     devices:
@@ -237,16 +237,26 @@ services:
 # 拥有者需要的是稳定 —— 参数化只会多一个「改了变量所有加入者一起断」的坑。
 #
 # 钉上同名是完全的空操作: 实测容器不重建、网络 id 不变。
+# ==========================================
+# [网络层] 默认网 = 隧道的会合网
+# ==========================================
+#
+# 本项目的默认网直接命名为会合网, 所以每个服务隐式就在上面, 不必逐个声明,
+# 而 AItelier / ActiveMemoryIndex 按同一个名字加入即可 —— 三个仓库同一种
+# 写法: 只给名字, 不写 external:。
+#
+# 为什么不写 external: true —— external 的网一旦缺失, compose 会在任何容器
+# 启动之前整个拒绝运行。那正是当初把网络挪进可选 `-f` 叠加文件的理由, 而那个
+# 叠加文件在 2026-08-25 造成了一次故障: 一个忘了带 -f 的 `up -d` 把 AItelier
+# 重建成不带会合网的样子, 容器 healthy、localhost 照答 200、公网路径没了,
+# 没有一处报错。一个裸 `docker compose up -d` 就能静默摘掉的部署属性, 不算属性。
+#
+# 代价说清楚: 网络已存在而不是本项目建的时, compose 每次 up 会告警一句
+# "exists but was not created for project"。行为正确, 只是唠叨 —— 选它是因为
+# 另一头的失败模式看不见, 而告警看得见。
+#
+# 名字打错不会报错, 而是默默建一张空网。公网黑了而 localhost 还答时, 先查:
+#   docker inspect cloudflare_tunnel --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
 networks:
   default:
-    name: vip-gateway_default
-  # 隧道的会合网 —— 名字说明它是什么, 而不是某个项目的内部细节。
-  #
-  # 以前外部项目 (AItelier / ActiveMemoryIndex) 是加入 vip-gateway_default
-  # 的, 那个名字对加入者毫无信息量: 它读起来像本项目的实现细节, 没有一个字
-  # 说「这是隧道路由进来的那张网」。而且它是本项目的 *默认* 网, 加入者因此
-  # 顺带够得到 vllm、media-gen 这些本不该共享的东西。
-  #
-  # 这张网不写 external:, 所以谁先起谁建, 缺了也不会让整个 up 失败。
-  cloudflare_edge:
-    name: cloudflare_edge
+    name: ${CF_EDGE_NETWORK:-cloudflare_edge}
