@@ -238,6 +238,12 @@ services:
     # 以宿主机 uid/gid 跑, 否则 actors/subjects/generated 写出来属主是 root,
     # 宿主机上要 sudo 才能动 —— 而这些是不可复现的资产, 迟早要手动备份。
     user: "1000:1000"
+    # LOOPBACK ONLY. 这个服务没有鉴权, 而它能往磁盘写文件、能删 actor/subject
+    # (见 continuity 自己的 config.py: 它的默认就是只听 127.0.0.1)。发布到宿主
+    # 是为了让宿主进程 (dsh) 能连 —— 它不是容器, 到不了这条网桥。绑
+    # 0.0.0.0 等于把删名册的权力交给同网段任何人。
+    ports:
+      - "127.0.0.1:9030:9030"
     environment:
       - CONTINUITY_TRANSPORT=streamable-http
       - CONTINUITY_HTTP_HOST=0.0.0.0
