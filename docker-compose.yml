@@ -211,3 +211,25 @@ services:
       /work/build/linux-vulkan-release/bin/audiocpp_server
       --config /conf/audio_server.json --no-ui
     restart: unless-stopped
+
+# ==========================================
+# [网络层] 共享网络 —— 名字钉死, 不许从目录名推导
+# ==========================================
+#
+# 这张网是本项目的隐式默认网, 但别的项目 (AItelier / activememoryindex /
+# mcp_server ...) 是按名字加入进来的, cloudflared 靠它打到各家的服务端口。
+# 名字不写出来时, compose 从项目名推导, 而项目名来自目录名 —— 也就是说
+# 把 ~/vip-gateway 改个名, 或者设一个 COMPOSE_PROJECT_NAME, 这张网就换了
+# 名字, 而每一个加入者都会默默新建一张空网: 容器全都 healthy, 各自的
+# localhost 全都正常, 只有跨项目的调用全断, 没有一处会报错。
+#
+# 2026-08-25 AItelier 那边刚以另一种触发方式吃过同一种沉默失败 (忘了带
+# 叠加文件的 -f), 排查花了一晚上。名字是别人依赖的契约, 契约就要写出来。
+#
+# 写死字面量而不是用变量: 加入者需要变量 (每台机器的网可能不同叫法),
+# 拥有者需要的是稳定 —— 参数化只会多一个「改了变量所有加入者一起断」的坑。
+#
+# 钉上同名是完全的空操作: 实测容器不重建、网络 id 不变。
+networks:
+  default:
+    name: vip-gateway_default
