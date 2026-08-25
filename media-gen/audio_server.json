@@ -38,6 +38,14 @@
         "qwen3_tts.mem_saver": true
       },
       "lazy": true
+    },
+    {
+      "id": "qwen3-asr",
+      "family": "qwen3_asr",
+      "path": "/models/audio/Qwen3-ASR-1.7B-GGUF",
+      "task": "asr",
+      "mode": "offline",
+      "lazy": true
     }
   ]
 }

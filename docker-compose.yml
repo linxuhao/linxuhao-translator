@@ -140,36 +140,41 @@ services:
     profiles: ["media"]
     ports:
       - "9010:9010"
-    devices:
-      # Vulkan 只需要 /dev/dri; /dev/kfd 是 ROCm 的计算接口, 已不再使用
-      - "/dev/dri:/dev/dri"
-    group_add:
-      - "44"    # video
-      - "992"   # render
+    # 没有 devices / group_add: 壳一行 GPU 代码都不跑, 生图配音全在 continuity 那边。
     environment:
+      - CONTINUITY_MCP_URL=http://continuity_mcp:9030/mcp
+      # /health 回报的 device 字段; 壳自己不碰显卡, 这个值只是转述本机怎么配的
       - VULKAN_DEVICE=1     # 1 = RX 7800 XT (RADV NAVI32); 0 = 7900 XTX, 被 vllm 占用
+      # ⚠️ 【限值耦合】下面四个上限 continuity 那边也有一份 (见本文件 continuity 段 +
+      # 它的 config.py)。壳必须知道它们, 因为 `clamped` 是 POST /v1/jobs 同步返回的 ——
+      # 那一刻任务还没跑, 拿不到 continuity 的结果, 只能自己按请求算。
+      # 两边不一致 = 算出来的 clamped 是错的, 而且没有任何一层会报错。改一边必须改另一边。
       - MAX_IMAGE_SIZE=1024
-      - SD_SERVER=http://sd_server:9020
-      - AUDIO_SERVER=http://audiocpp_server:9021
-      - ENGINE_WAIT_S=180      # 引擎冷启动要从磁盘重读 12.6 GB 权重
-      - AUDIO_IDLE_UNLOAD_S=120   # 空闲 120s 后卸掉音频模型, 显卡回到零常驻
-      - RETENTION_DAYS=30      # 生成产物保留 30 天, 0 = 不清理
+      - MAX_AUDIO_SECONDS=120
+      - MAX_SPEECH_CHARS=200
+      - MAX_SAMPLE_CHARS=45
     volumes:
       - ./media-gen/app.py:/app/app.py
-      - ./generated:/generated
-      # 角色参考音: 长期资产, 和有 30 天清理的 ./generated 分开放
-      - ./actors:/actors
-      - ./subjects:/subjects
+      # continuity 的状态目录, 只读 —— 三条下载路径 (/files/, /v1/actors/{n}/audio,
+      # /v1/subjects/{n}/image) 直接从这里发文件。写入一律走 MCP, 所以是 :ro。
+      - ./continuity-state:/state:ro
+      # 三处 base64 入参在 MCP 那边是"本机路径"参数, 得落到两个容器都看得见的地方。
+      # 同一个宿主机目录在 continuity 那边是 /state/_shell_tmp (它的 /state 是可写的),
+      # 这样不用去动 continuity 那一段的挂载。
+      - ./continuity-state/_shell_tmp:/shell_tmp
     depends_on:
-      - sd-server
-      - audiocpp-server
+      - continuity
     restart: unless-stopped
 
   # ==========================================
   # GPU 1: ggml/Vulkan 推理引擎 (常驻, 模型不重载)
   # ROCm 在这张卡上 VAE 解码静默算错且非确定 —— 见 ROCm/ROCm#6633。
   # Vulkan/RADV 走运行时编译的 SPIR-V, 不查 per-gfx 预编译 kernel 表, 结果正确且更快。
-  # 二进制与权重在仓库外 (体积大), 构建方式见 media-gen/README-vulkan.md。
+  #
+  # 二进制在镜像里 (engines/Dockerfile 从钉死的 ref 在镜像内 clone + 编译), 仓库外
+  # 只剩权重。在这之前二进制是宿主机手工编的、由这里挂进来 —— 那让
+  # "新机器上 docker compose up -d" 是假的: 挂载点在新机器上根本不存在。
+  # 权重 22 GB 进不了 git, 所以仍然挂宿主机, 路径见 .env.example 的两个 *_WEIGHTS_DIR。
   # ==========================================
   sd-server:
     build:
@@ -184,10 +189,9 @@ services:
       - "44"
       - "992"
     volumes:
-      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/stable-diffusion.cpp:/work:ro
-      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/sdmodels2:/models/sd:ro
+      - ${SD_WEIGHTS_DIR:-/home/linxuhao/audiocpp/sdmodels2}:/models/sd:ro
     command: >
-      /work/build/bin/sd-server
+      sd-server
       --diffusion-model /models/sd/flux-2-klein-4b-Q8_0.gguf
       --vae /models/sd/flux2-vae.safetensors
       --llm /models/sd/qwen_3_4b.safetensors
@@ -209,34 +213,72 @@ services:
       - "44"
       - "992"
     volumes:
-      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/audio.cpp:/work:ro
-      - ${AUDIOCPP_ROOT:-/home/linxuhao/audiocpp}/models:/models/audio:ro
+      - ${AUDIO_WEIGHTS_DIR:-/home/linxuhao/audiocpp/models}:/models/audio:ro
+      # 这份配置和上游 deploy/audio_server.json.tmpl 逐字等价 (它的 __DEVICE__ = 1),
+      # 所以镜像换成自带二进制之后照用, 不需要改。四个模型路径都是 /models/audio/*。
       - ./media-gen/audio_server.json:/conf/audio_server.json:ro
-      # voice_ref 的路径由引擎解析, 所以它也要看得见同一个 /actors
-      - ./actors:/actors:ro
+      # 曾经挂过 ./actors:/actors:ro —— 那时克隆走 /v1/tasks/run, 参考音的路径由引擎
+      # 自己解析, 所以两边必须看见同一个目录。现在走 /v1/audio/speech 传 base64,
+      # 引擎不再碰文件系统, 这也是跨机克隆能成立的原因。
     command: >
-      /work/build/linux-vulkan-release/bin/audiocpp_server
+      audiocpp_server
       --config /conf/audio_server.json --no-ui
     restart: unless-stopped
 
-# ==========================================
-# [网络层] 共享网络 —— 名字钉死, 不许从目录名推导
-# ==========================================
-#
-# 这张网是本项目的隐式默认网, 但别的项目 (AItelier / activememoryindex /
-# mcp_server ...) 是按名字加入进来的, cloudflared 靠它打到各家的服务端口。
-# 名字不写出来时, compose 从项目名推导, 而项目名来自目录名 —— 也就是说
-# 把 ~/vip-gateway 改个名, 或者设一个 COMPOSE_PROJECT_NAME, 这张网就换了
-# 名字, 而每一个加入者都会默默新建一张空网: 容器全都 healthy, 各自的
-# localhost 全都正常, 只有跨项目的调用全断, 没有一处会报错。
-#
-# 2026-08-25 AItelier 那边刚以另一种触发方式吃过同一种沉默失败 (忘了带
-# 叠加文件的 -f), 排查花了一晚上。名字是别人依赖的契约, 契约就要写出来。
-#
-# 写死字面量而不是用变量: 加入者需要变量 (每台机器的网可能不同叫法),
-# 拥有者需要的是稳定 —— 参数化只会多一个「改了变量所有加入者一起断」的坑。
-#
-# 钉上同名是完全的空操作: 实测容器不重建、网络 id 不变。
+  # ==========================================
+  # continuity MCP server (streamable-http, 纯 CPU)
+  #
+  # 迁移第一步: 先把 continuity 立成一个常驻服务, 之后 media-gen 改成薄壳走它。
+  # 本服务不碰显卡 —— 生图/配音都是 HTTP 打给下面那两个引擎, 和 media-gen 打的是
+  # 同一对端口, 引擎自己排队。
+  #
+  # 【不发布端口】这个服务没有任何鉴权, 而它的工具能往磁盘写文件、能删 actor/subject。
+  # 所以 ports: 一行都不能有 —— 只让同一个 compose 网络里的容器按容器名连它。
+  # CONTINUITY_HTTP_HOST 必须是 0.0.0.0: 默认的 127.0.0.1 在容器里意味着连同网络的
+  # 别的容器也连不上 (它只绑 loopback), 那样这个服务等于没起。
+  # 这两条不矛盾: 绑 0.0.0.0 是绑容器的网卡, 不发布端口宿主机上就看不到它。
+  # ==========================================
+  continuity:
+    build:
+      context: ./continuity
+    container_name: continuity_mcp
+    profiles: ["media"]
+    # 以宿主机 uid/gid 跑, 否则 actors/subjects/generated 写出来属主是 root,
+    # 宿主机上要 sudo 才能动 —— 而这些是不可复现的资产, 迟早要手动备份。
+    user: "1000:1000"
+    # LOOPBACK ONLY. 这个服务没有鉴权, 而它能往磁盘写文件、能删 actor/subject
+    # (见 continuity 自己的 config.py: 它的默认就是只听 127.0.0.1)。发布到宿主
+    # 是为了让宿主进程 (dsh) 能连 —— 它不是容器, 到不了这条网桥。绑
+    # 0.0.0.0 等于把删名册的权力交给同网段任何人。
+    ports:
+      - "127.0.0.1:9030:9030"
+    environment:
+      - CONTINUITY_TRANSPORT=streamable-http
+      - CONTINUITY_HTTP_HOST=0.0.0.0
+      - CONTINUITY_HTTP_PORT=9030
+      - CONTINUITY_HTTP_PATH=/mcp
+      # 引擎在同机同网络, 用容器名。
+      - SD_SERVER=http://sd_server:9020
+      - AUDIO_SERVER=http://audiocpp_server:9021
+      - CONTINUITY_STATE_DIR=/state
+      # 参考音上限。continuity 的默认是 15s (为小显存机器调的), 而 media-gen 一直是 30s ——
+      # 不设这一行, 15~30 秒的参考音会从"能导入"变成 400, 是一次静默的行为回归。
+      - CONTINUITY_REF_MAX_S=30
+      - MAX_IMAGE_SIZE=1024
+      - ENGINE_WAIT_S=180        # 引擎冷启动要从磁盘重读十几 GB 权重
+      - AUDIO_IDLE_UNLOAD_S=120  # 空闲 120s 卸掉音频模型, 显卡回到零常驻
+      - RETENTION_DAYS=30        # generated/ 保留 30 天; actors/subjects 永不清理
+    volumes:
+      # actors/ (参考音) 和 subjects/ (定妆图) 不可复现 —— 重铸出来是另一个人/另一个箱子。
+      # 留在容器可写层里, 一次 docker compose up 重建就永久没了。必须落宿主机。
+      - ./continuity-state:/state
+      # rembg 模型缓存。不挂的话每次重建容器都要重新下 ~214 MB。
+      - ./continuity-cache:/cache
+    depends_on:
+      - sd-server
+      - audiocpp-server
+    restart: unless-stopped
+
 # ==========================================
 # [网络层] 默认网 = 隧道的会合网
 # ==========================================
@@ -254,6 +296,13 @@ services:
 # 代价说清楚: 网络已存在而不是本项目建的时, compose 每次 up 会告警一句
 # "exists but was not created for project"。行为正确, 只是唠叨 —— 选它是因为
 # 另一头的失败模式看不见, 而告警看得见。
+#
+# ⚠️ 【待定】continuity_mcp 没有鉴权, 而它的工具能往磁盘写文件、能删 actor/subject
+# (见它自己那段注释)。以前默认网是 vip-gateway 私有的, 现在默认网就是会合网,
+# 于是同网的 AItelier / ActiveMemoryIndex 也能按容器名连它。目前 media profile
+# 不在 linxuhaserver 上跑, 所以本机没有实际暴露; 但真要跑起来, 正确的做法是给
+# 引擎层 (continuity + sd_server + audiocpp_server) 单开一张私有网, media_gen
+# 双挂两张 —— 别让"能被隧道够到"和"能被任何邻居够到"变成同一件事。
 #
 # 名字打错不会报错, 而是默默建一张空网。公网黑了而 localhost 还答时, 先查:
 #   docker inspect cloudflare_tunnel --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'

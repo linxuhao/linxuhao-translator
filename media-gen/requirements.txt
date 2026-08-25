@@ -1,7 +1,10 @@
 fastapi
 uvicorn[standard]
 pydantic>=2
-numpy
-pillow
-rembg
-onnxruntime
+# httpx2 是 mcp 2.x 自己换用的 HTTP 客户端 (不是 httpx, 也不是笔误)。壳直接 import
+# 它来给 MCP 会话传自定义超时, 所以显式声明, 不靠 mcp 传递进来。
+httpx2
+# MCP 客户端 —— 壳靠它跟 continuity 说话。钉死版本: 本文件的代码依赖 2.x 的
+# snake_case 字段 (output_schema / structured_content) 和 streamable_http_client
+# 的双值返回, 而这些在 1.x 里是另一套名字。
+mcp==2.0.0

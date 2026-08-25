@@ -82,6 +82,115 @@ docker compose up -d
 
 > The first boot takes a while as it downloads the `Qwen3-ASR-1.7B` and `Qwen3.6-27B` models into `~/.cache/huggingface`.
 
+#### Media generation depends on a published package
+
+`media-gen` is a **thin shell** (~780 lines). It serves the same 16 HTTP endpoints it always
+has, but every generation, asset store, and VRAM decision is delegated over **MCP-over-HTTP**
+to the `continuity` service, which runs [`dsh-continuity`](https://pypi.org/project/dsh-continuity/)
+from PyPI:
+
+```
+mcp-server ──HTTP :9010──▶ media-gen (shell) ──MCP :9030──▶ continuity ──HTTP──▶ sd-server :9020
+                                     │                     (dsh-continuity)      audiocpp-server :9021
+                                     └── reads ./continuity-state (:ro) to serve /files/
+```
+
+Three consequences worth knowing before you deploy:
+
+* **The version is pinned on purpose.** `continuity/Dockerfile` installs an exact
+  `dsh-continuity==X.Y.Z`. The shell is written against that release's 21 MCP tools and their
+  `outputSchema`; a floating version would silently change this service's contract. To upgrade,
+  bump the `ARG` and `docker compose build continuity`.
+* **`continuity` does not own any weights.** It is pointed at this repo's own `sd-server` and
+  `audiocpp-server` (`SD_SERVER` / `AUDIO_SERVER`). The package ships its own installer
+  (`continuity-setup`) that would build engines and download ~18 GB — **do not run it here**;
+  this deployment is the bring-your-own-backend path.
+* **Port 9030 is deliberately not published.** The MCP server has no authentication and its
+  tools can write to disk and delete actors/subjects. It is reachable only from the compose
+  network.
+
+`docker compose up -d` handles the ordering — `media-gen` declares `depends_on: continuity`,
+and `continuity` declares `depends_on: [sd-server, audiocpp-server]`. Note that `depends_on`
+waits for *start*, not readiness; `continuity` retries a cold engine for `ENGINE_WAIT_S`
+(180 s by default), which covers `sd-server` re-reading 12.6 GB of weights from disk.
+
+Durable assets (cloned voice references, pinned character sheets) live in
+`./continuity-state/` on the host — **they are not reproducible, so back them up.**
+
+#### Bringing the two engines up on a new machine
+
+The engines are **built inside the image**. `engines/Dockerfile` is a vendored copy of
+`dsh-continuity`'s `src/continuity_mcp/deploy/Dockerfile`; it clones and compiles
+`stable-diffusion.cpp` and `audio.cpp` at pinned refs (`SDCPP_REF=97d2990`,
+`AUDIOCPP_REF=aec444c`) in a build stage and copies just the binaries plus
+`model_specs/` into a Vulkan-runtime stage. Nothing outside this repo is needed to get
+the binaries. The first build compiles two C++ projects and takes a while; after that it
+is layer-cached. (It used to be the opposite: the binaries were compiled by hand on the
+host and bind-mounted in, which made `docker compose up -d` a lie on any machine but the
+one they were built on.)
+
+The **weights are not** in the image — ~25 GB, they stay on the host and are mounted
+`:ro`. That is the one remaining manual step:
+
+```bash
+pip install -U huggingface_hub
+
+# Downloads the 7 files into the layout compose expects. Already-present files are
+# skipped, so it is safe to re-run as a verification pass.
+# Override SD_WEIGHTS_DIR / AUDIO_WEIGHTS_DIR to put them elsewhere (see .env.example).
+python3 - <<'PY'
+from huggingface_hub import hf_hub_download
+from pathlib import Path
+import os
+SD    = Path(os.environ.get("SD_WEIGHTS_DIR",    Path.home() / "audiocpp/sdmodels2"))
+AUDIO = Path(os.environ.get("AUDIO_WEIGHTS_DIR", Path.home() / "audiocpp/models"))
+Q = "Qwen3-TTS-12Hz-1.7B"
+WANT = [
+    (SD, "leejet/FLUX.2-klein-4B-GGUF", "flux-2-klein-4b-Q8_0.gguf", "flux-2-klein-4b-Q8_0.gguf"),
+    (SD, "Comfy-Org/flux2-klein-4B", "split_files/vae/flux2-vae.safetensors", "flux2-vae.safetensors"),
+    (SD, "Comfy-Org/flux2-klein-4B", "split_files/text_encoders/qwen_3_4b.safetensors", "qwen_3_4b.safetensors"),
+    (AUDIO, "audio-cpp/audio.cpp-gguf",
+     "Stable-Audio-3-Small-Music-GGUF/stable-audio-3-small-music-f16.gguf",
+     "stable-audio-3-small-music-f16.gguf"),
+    (AUDIO, "audio-cpp/audio.cpp-gguf",
+     f"{Q}-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf",
+     f"{Q}-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf"),
+    (AUDIO, "audio-cpp/audio.cpp-gguf",
+     f"{Q}-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+     f"{Q}-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf"),
+    (AUDIO, "audio-cpp/audio.cpp-gguf",
+     "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
+     "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf"),
+]
+for root, repo, remote, dest in WANT:
+    d = root / dest
+    if d.exists():
+        print(f"已有 {d} ({d.stat().st_size / 2**30:.2f} GiB)"); continue
+    d.parent.mkdir(parents=True, exist_ok=True)
+    p = hf_hub_download(repo_id=repo, filename=remote, local_dir=str(root / "_hf"))
+    Path(p).replace(d); print(f"下好 {d}")
+PY
+
+docker compose up -d sd-server audiocpp-server continuity media-gen
+```
+
+Two values are wired for **this** box and need changing on a single-GPU machine — GPU 0
+here is the 7900 XTX held by vLLM, so the engines are pinned to GPU **1**:
+
+| where | value | meaning |
+|---|---|---|
+| `docker-compose.yml`, `sd-server` `command` | `--backend vulkan1` | Vulkan device index |
+| `media-gen/audio_server.json` | `"device": 1` | same, for the audio engine |
+
+The image model is **`flux-2-klein-4b-Q8_0.gguf`**, named literally in the `sd-server`
+`command`. Upstream's `models.json` defaults to `Q4_0` instead — same VRAM peak, 1.7 GB
+less disk. If you switch, change the filename in both places or the engine won't start.
+
+> `dsh-continuity` also ships `continuity-setup`, which would build engines and fetch
+> weights for you — **do not run it here.** It builds its own images, starts its own
+> containers (`continuity_sd` / `continuity_audio`) and wants a different weights layout
+> (`<dir>/sd`, `<dir>/audio`). This deployment brings its own backend.
+
 > On non-AMD hardware you'll need to adapt the image/devices to your GPU — see [Hardware Support](#hardware-support). An experimental auto-installer that generates this compose file for you is also documented there.
 
 ### Access the UI

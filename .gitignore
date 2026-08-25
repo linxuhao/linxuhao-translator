@@ -229,3 +229,10 @@ subjects/*.png
 subjects/*.json
 cache/
 
+
+# continuity MCP server 的运行时状态与缓存。
+# continuity-state/ 里是 actors/ (参考音) + subjects/ (定妆图) + generated/ (产出),
+# 全是二进制资产, 而且 actors/subjects 不可复现 —— 不进 git, 要保就自己备份。
+continuity-state/
+# rembg 的 onnx 模型缓存 (几百 MB), 丢了会自动重下。
+continuity-cache/
