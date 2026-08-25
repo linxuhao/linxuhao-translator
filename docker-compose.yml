@@ -9,6 +9,13 @@ services:
     command: tunnel run
     environment:
       - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
+    networks:
+      # 两张网: default 用来够到本项目自己的服务 (gateway / mcp_server / …),
+      # cloudflare_edge 是给外部项目加入的会合点。别的项目不该为了被隧道
+      # 够到, 就被迫坐进本项目的默认网里 —— 那会顺带把 vllm、media-gen
+      # 这些也暴露给它们。
+      - default
+      - cloudflare_edge
 
   # ----------------------------------------
   # 调度中枢: API Gateway & PWA
@@ -233,3 +240,13 @@ services:
 networks:
   default:
     name: vip-gateway_default
+  # 隧道的会合网 —— 名字说明它是什么, 而不是某个项目的内部细节。
+  #
+  # 以前外部项目 (AItelier / ActiveMemoryIndex) 是加入 vip-gateway_default
+  # 的, 那个名字对加入者毫无信息量: 它读起来像本项目的实现细节, 没有一个字
+  # 说「这是隧道路由进来的那张网」。而且它是本项目的 *默认* 网, 加入者因此
+  # 顺带够得到 vllm、media-gen 这些本不该共享的东西。
+  #
+  # 这张网不写 external:, 所以谁先起谁建, 缺了也不会让整个 up 失败。
+  cloudflare_edge:
+    name: cloudflare_edge
