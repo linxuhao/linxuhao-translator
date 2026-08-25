@@ -586,18 +586,32 @@ list_profiles() {
 # Installation Functions
 # ==========================================
 
+# Which service groups this host runs. Every service except cloudflared carries
+# a `profiles:` key, so a BARE `docker compose up -d` starts the tunnel and
+# nothing else — quietly, exit 0. That is right for a host that only fronts the
+# stack and wrong for an install, so the installer names them.
+#   COMPOSE_PROFILES=gateway ./install.sh     # front only (no GPU)
+#   COMPOSE_PROFILES=media ./install.sh       # engines only
+: "${COMPOSE_PROFILES:=gateway,translator,media}"
+export COMPOSE_PROFILES
+
 pull_images() {
-    log_step "Pulling Docker images..."
+    log_step "Pulling Docker images (profiles: $COMPOSE_PROFILES)..."
     cd "$SCRIPT_DIR"
     docker compose pull || true
     log_ok "Images pulled"
 }
 
 start_services() {
-    log_step "Starting services..."
+    log_step "Starting services (profiles: $COMPOSE_PROFILES)..."
     cd "$SCRIPT_DIR"
     docker compose up -d
-    log_ok "Services started"
+    started=$(docker compose ps --services --status running | tr '\n' ' ')
+    log_ok "Services started: ${started:-none}"
+    if [ "${started:-}" = "cloudflared " ] || [ -z "${started:-}" ]; then
+        log_warn "Only the tunnel came up. COMPOSE_PROFILES is '$COMPOSE_PROFILES' — \
+if that is not what you meant, set it and re-run."
+    fi
 }
 
 wait_for_services() {

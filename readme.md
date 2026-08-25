@@ -77,8 +77,17 @@ git clone https://github.com/linxuhao/linxuhao-translator.git
 cd linxuhao-translator
 
 # Optionally configure your tokens in .env (CF_TUNNEL_TOKEN, HF_TOKEN)
-docker compose up -d
+
+# Pick what THIS host runs. Every service except the tunnel is behind a
+# profile, so a bare `up -d` starts cloudflared and nothing else.
+#   gateway     api_gateway + mcp_server   (the front; no GPU)
+#   translator  vllm_qwen + qwen3_asr
+#   media       media_gen + continuity + sd_server + audiocpp_server
+COMPOSE_PROFILES=gateway,translator,media docker compose up -d
 ```
+
+Put `COMPOSE_PROFILES=…` in `.env` to stop repeating it. A host that only fronts
+the stack runs `gateway`; the GPU box runs `translator,media`.
 
 > The first boot takes a while as it downloads the `Qwen3-ASR-1.7B` and `Qwen3.6-27B` models into `~/.cache/huggingface`.
 

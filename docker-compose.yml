@@ -137,6 +137,9 @@ services:
     build:
       context: ./media-gen
     container_name: media_gen
+    networks:
+      - default
+      - engines
     profiles: ["media"]
     ports:
       - "9010:9010"
@@ -180,6 +183,9 @@ services:
     build:
       context: ./engines
     container_name: sd_server
+    networks:
+      - default
+      - engines
     profiles: ["media"]
     ports:
       - "9020:9020"
@@ -204,6 +210,9 @@ services:
     build:
       context: ./engines
     container_name: audiocpp_server
+    networks:
+      - default
+      - engines
     profiles: ["media"]
     ports:
       - "9021:9021"
@@ -242,6 +251,17 @@ services:
     build:
       context: ./continuity
     container_name: continuity_mcp
+    networks:
+      # engines ONLY, deliberately NOT the shared default network. This service
+      # has no authentication and its tools write files and delete actors /
+      # subjects — deleting one is unrecoverable, a recast is a different person.
+      # Its own comment below justifies publishing no ports on the grounds that
+      # "only containers in the same compose network can reach it by name"; once
+      # the default network became the SHARED tunnel network (cloudflare_edge),
+      # that premise stopped holding and AItelier / ActiveMemoryIndex could have
+      # reached it. "Reachable by the tunnel" and "reachable by any neighbour"
+      # must not be the same property.
+      - engines
     profiles: ["media"]
     # 以宿主机 uid/gid 跑, 否则 actors/subjects/generated 写出来属主是 root,
     # 宿主机上要 sudo 才能动 —— 而这些是不可复现的资产, 迟早要手动备份。
@@ -309,3 +329,7 @@ services:
 networks:
   default:
     name: ${CF_EDGE_NETWORK:-cloudflare_edge}
+  # The engine tier. Private to this project — no other project joins it, and it
+  # is where anything unauthenticated belongs now that `default` is the shared
+  # tunnel network. media-gen sits on both and is the only way in.
+  engines:

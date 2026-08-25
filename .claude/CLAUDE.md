@@ -114,7 +114,7 @@ profiles:
 
 ```bash
 # Start all services
-docker compose up -d
+COMPOSE_PROFILES=gateway,translator,media docker compose up -d
 
 # Rebuild gateway after code changes
 docker compose up -d --build gateway
