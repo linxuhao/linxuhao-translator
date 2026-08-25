@@ -78,9 +78,9 @@ cd linxuhao-translator
 
 # Optionally configure your tokens in .env (CF_TUNNEL_TOKEN, HF_TOKEN)
 
-# Pick what THIS host runs. Every service except the tunnel is behind a
-# profile, so a bare `up -d` starts cloudflared and nothing else.
-#   gateway     api_gateway + mcp_server   (the front; no GPU)
+# Pick what THIS host runs. EVERY service is behind a profile, so a bare
+# `up -d` selects nothing and says so ("no service selected").
+#   gateway     cloudflare_tunnel + api_gateway + mcp_server   (the front; no GPU)
 #   translator  vllm_qwen + qwen3_asr
 #   media       media_gen + continuity + sd_server + audiocpp_server
 COMPOSE_PROFILES=gateway,translator,media docker compose up -d
@@ -88,6 +88,13 @@ COMPOSE_PROFILES=gateway,translator,media docker compose up -d
 
 Put `COMPOSE_PROFILES=…` in `.env` to stop repeating it. A host that only fronts
 the stack runs `gateway`; the GPU box runs `translator,media`.
+
+**The tunnel is in `gateway`, not always-on.** One machine terminates the
+tunnel. A profile-less cloudflared would also start on the GPU box, and a second
+connector on the same token is a second replica Cloudflare load-balances across
+— one whose network holds no `api_gateway` and no `mcp_server`, so a share of
+public requests would intermittently fail to reach an origin while both hosts
+looked healthy.
 
 > The first boot takes a while as it downloads the `Qwen3-ASR-1.7B` and `Qwen3.6-27B` models into `~/.cache/huggingface`.
 

@@ -5,6 +5,16 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloudflare_tunnel
+    # gateway, NOT profile-less. Profile-less looked safer ("the tunnel can
+    # never be forgotten"), but this file serves TWO machines: the GPU box is
+    # told to run `translator,media`, and a profile-less cloudflared starts
+    # there too — a SECOND replica of the same tunnel token, which Cloudflare
+    # load-balances across. That replica's network has no api_gateway and no
+    # mcp_server, so a share of public requests hit an origin that cannot be
+    # resolved, intermittently, with both hosts looking healthy. Put
+    # COMPOSE_PROFILES in .env on the front host and a bare `up -d` still
+    # brings the tunnel up.
+    profiles: ["gateway"]
     restart: unless-stopped
     command: tunnel run
     environment:
@@ -184,7 +194,13 @@ services:
       context: ./engines
     container_name: sd_server
     networks:
-      - default
+      # engines ONLY. `default` was dead here — nothing on the shared network
+      # references these two; their only in-file consumer is continuity, which
+      # lives on `engines`, and media-gen (the intended door) talks solely to
+      # continuity_mcp:9030. Keeping `default` cost exactly what moving
+      # continuity was meant to buy: a neighbour project on cloudflare_edge
+      # could resolve sd_server / audiocpp_server by name and drive an
+      # unauthenticated GPU engine. Host ports are unchanged.
       - engines
     profiles: ["media"]
     ports:
@@ -211,7 +227,13 @@ services:
       context: ./engines
     container_name: audiocpp_server
     networks:
-      - default
+      # engines ONLY. `default` was dead here — nothing on the shared network
+      # references these two; their only in-file consumer is continuity, which
+      # lives on `engines`, and media-gen (the intended door) talks solely to
+      # continuity_mcp:9030. Keeping `default` cost exactly what moving
+      # continuity was meant to buy: a neighbour project on cloudflare_edge
+      # could resolve sd_server / audiocpp_server by name and drive an
+      # unauthenticated GPU engine. Host ports are unchanged.
       - engines
     profiles: ["media"]
     ports:
@@ -316,13 +338,6 @@ services:
 # 代价说清楚: 网络已存在而不是本项目建的时, compose 每次 up 会告警一句
 # "exists but was not created for project"。行为正确, 只是唠叨 —— 选它是因为
 # 另一头的失败模式看不见, 而告警看得见。
-#
-# ⚠️ 【待定】continuity_mcp 没有鉴权, 而它的工具能往磁盘写文件、能删 actor/subject
-# (见它自己那段注释)。以前默认网是 vip-gateway 私有的, 现在默认网就是会合网,
-# 于是同网的 AItelier / ActiveMemoryIndex 也能按容器名连它。目前 media profile
-# 不在 linxuhaserver 上跑, 所以本机没有实际暴露; 但真要跑起来, 正确的做法是给
-# 引擎层 (continuity + sd_server + audiocpp_server) 单开一张私有网, media_gen
-# 双挂两张 —— 别让"能被隧道够到"和"能被任何邻居够到"变成同一件事。
 #
 # 名字打错不会报错, 而是默默建一张空网。公网黑了而 localhost 还答时, 先查:
 #   docker inspect cloudflare_tunnel --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'

@@ -497,6 +497,25 @@ EOF
 generate_docker_compose() {
     local output_file="$SCRIPT_DIR/docker-compose.yml"
 
+    # This OVERWRITES docker-compose.yml, and the generator emits a smaller,
+    # different stack than the hand-maintained file this repo ships: no media
+    # tier (media-gen / continuity / sd-server / audiocpp-server), no
+    # `profiles:`, and different container names (api_gateway -> gateway,
+    # cloudflare_tunnel -> cloudflared) — which matters because the tunnel
+    # routes by container name. Losing that file to an installer run and only
+    # noticing when the public path goes dark is the failure this whole repo
+    # spent a night removing, so: keep a real copy and say what changes.
+    if [ -f "$output_file" ]; then
+        local backup="$output_file.bak.$(date +%Y%m%d-%H%M%S)"
+        cp "$output_file" "$backup"
+        log_warn "Overwriting docker-compose.yml with the generated stack."
+        log_warn "  Your previous file: $backup"
+        log_warn "  The generated one has NO media tier and NO profiles, and"
+        log_warn "  renames api_gateway->gateway, cloudflare_tunnel->cloudflared."
+        log_warn "  Keeping the shipped file instead? Ctrl-C now and run"
+        log_warn "  'COMPOSE_PROFILES=... docker compose up -d' directly."
+    fi
+
     python3 "$SCRIPT_DIR/scripts/generate_config.py" \
         --env "$SCRIPT_DIR/config/generated/hardware.env" \
         --output "$output_file"
@@ -592,24 +611,36 @@ list_profiles() {
 # stack and wrong for an install, so the installer names them.
 #   COMPOSE_PROFILES=gateway ./install.sh     # front only (no GPU)
 #   COMPOSE_PROFILES=media ./install.sh       # engines only
-: "${COMPOSE_PROFILES:=gateway,translator,media}"
-export COMPOSE_PROFILES
+# Only default it when NOTHING else has said so. An EXPORTED variable beats
+# .env in Compose, so unconditionally exporting a default here would silently
+# override the `COMPOSE_PROFILES=gateway` a front-only host was told (readme) to
+# put in .env — and then pull vllm and build the engines on a box that must
+# never run them.
+if [ -z "${COMPOSE_PROFILES:-}" ] && ! grep -qs '^[[:space:]]*COMPOSE_PROFILES=' "$SCRIPT_DIR/.env"; then
+    COMPOSE_PROFILES=gateway,translator,media
+    export COMPOSE_PROFILES
+elif [ -n "${COMPOSE_PROFILES:-}" ]; then
+    export COMPOSE_PROFILES
+fi
 
 pull_images() {
-    log_step "Pulling Docker images (profiles: $COMPOSE_PROFILES)..."
+    log_step "Pulling Docker images (profiles: ${COMPOSE_PROFILES:-from .env})..."
     cd "$SCRIPT_DIR"
     docker compose pull || true
     log_ok "Images pulled"
 }
 
 start_services() {
-    log_step "Starting services (profiles: $COMPOSE_PROFILES)..."
+    log_step "Starting services (profiles: ${COMPOSE_PROFILES:-from .env})..."
     cd "$SCRIPT_DIR"
     docker compose up -d
-    started=$(docker compose ps --services --status running | tr '\n' ' ')
+    # `|| started=""` matters under `set -eo pipefail`: a failing `docker compose
+    # ps` would otherwise abort the installer immediately AFTER `up -d` had
+    # succeeded, so a good deploy would read as a failed one.
+    started=$(docker compose ps --services --status running | tr '\n' ' ') || started=""
     log_ok "Services started: ${started:-none}"
     if [ "${started:-}" = "cloudflared " ] || [ -z "${started:-}" ]; then
-        log_warn "Only the tunnel came up. COMPOSE_PROFILES is '$COMPOSE_PROFILES' — \
+        log_warn "Only the tunnel came up. COMPOSE_PROFILES is '${COMPOSE_PROFILES:-unset (read from .env)}' — \
 if that is not what you meant, set it and re-run."
     fi
 }

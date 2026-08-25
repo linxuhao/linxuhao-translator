@@ -365,6 +365,18 @@ def main():
     # Always add MCP server for Tailscale network access
     config = add_mcp_server(config)
 
+    # The rendezvous network. Without this block the generated file falls back
+    # to compose's implicit default (named after the directory), the cloudflared
+    # connector and the app land on DIFFERENT networks, and the public path is
+    # gone while every container is healthy and localhost still answers 200 —
+    # no error anywhere. Selected BY NAME with no `external:`, matching the
+    # hand-maintained docker-compose.yml: name an existing network and compose
+    # joins it, name nothing and compose creates one, and a clean machine still
+    # starts.
+    config['networks'] = {
+        'default': {'name': '${CF_EDGE_NETWORK:-cloudflare_edge}'},
+    }
+
     # Write output with header comment
     output_path = Path(args.output)
 
