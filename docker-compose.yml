@@ -227,6 +227,14 @@ services:
     build:
       context: ./engines
     container_name: sd_server
+    # 两个引擎是同一个 build context 编出来的同一份二进制, 所以显式共用一个镜像名。
+    # 不写 image: 时 compose 按服务名各生成一个 (vip-gateway-sd-server /
+    # -audiocpp-server), 于是 `build sd-server` 之后 audiocpp_server 仍在跑旧二进制
+    # —— 编译成功、部署成功、一半没更新, 全程零报错。2026-08-29 升 audio.cpp v0.7.0
+    # 时就是这么被骗过去一轮的: 镜像重建完, 容器里的二进制还是 8 天前那个。
+    # 上游 (dsh-continuity 的 deploy/docker-compose.yml) 一直是共用一个镜像名的,
+    # 是本文件手写时漏了。
+    image: vip-gateway-engines:latest
     networks:
       # engines ONLY. `default` was dead here — nothing on the shared network
       # references these two; their only in-file consumer is continuity, which
@@ -260,6 +268,7 @@ services:
     build:
       context: ./engines
     container_name: audiocpp_server
+    image: vip-gateway-engines:latest   # 同上, 与 sd-server 共用
     networks:
       # engines ONLY. `default` was dead here — nothing on the shared network
       # references these two; their only in-file consumer is continuity, which

@@ -16,12 +16,9 @@
 #     git -C /tmp/dsh checkout <新版本的 tag/commit>
 #     diff /tmp/dsh/src/continuity_mcp/deploy/Dockerfile engines/Dockerfile
 #     # 确认差异只在本注释块, 然后覆盖并改上面的"版本:"这一行
-#     # 两个服务都要 build: 它们共享 build context, 但都没写 image:, 于是 compose
-#     # 按服务名各生成一个镜像 (vip-gateway-sd-server / -audiocpp-server)。
-#     # 只 build 一个, 另一个会继续跑旧二进制 —— 编译成功、部署成功、一半没更新,
-#     # 全程零报错。2026-08-29 升 audio.cpp v0.7.0 时就是这么被骗过去一轮的。
-#     # 第二次 build 全命中缓存, 0.4 秒。
-#     docker compose build sd-server audiocpp-server
+#     # build 一个就够: 两个引擎在 compose 里共用 image: vip-gateway-engines:latest
+#     # (为什么显式写死这个名字, 见 docker-compose.yml 里那段注释)。
+#     docker compose build sd-server
 #     # 这四个必须一起 up: sd-server/audiocpp-server/continuity 只在 engines 网上,
 #     # 只挪两个引擎会把 continuity 甩在旧网上, 媒体链路当场断掉。
 #     docker compose up -d media-gen sd-server audiocpp-server continuity
