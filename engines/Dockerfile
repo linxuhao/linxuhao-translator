@@ -5,7 +5,7 @@
 # ⚠️ 这是一份 VENDORED 拷贝, 会漂。
 #   上游: https://github.com/linxuhao/Deepseek-Continuity
 #         src/continuity_mcp/deploy/Dockerfile
-#   版本: d3662dc (= PyPI dsh-continuity 0.5.4, 和 continuity/Dockerfile 里钉的
+#   版本: dd0226e (= PyPI dsh-continuity 0.5.5, 和 continuity/Dockerfile 里钉的
 #         ARG DSH_CONTINUITY_VERSION 是同一个版本 —— 两边要一起动)
 #   本地改动: 无。分割线以下逐字来自上游。
 #             vip-gateway 侧的差异全在 docker-compose.yml (权重挂载路径、
@@ -37,7 +37,7 @@
 #   现在源码 clone + 编译都在镜像内, 仓库外只剩权重 (22 GB, 见 readme)。
 # ==========================================
 # ------------------------------------------------------------------
-# 以下逐字来自上游 dsh-continuity d3662dc
+# 以下逐字来自上游 dsh-continuity dd0226e
 # ------------------------------------------------------------------
 # ==========================================
 # 两个 ggml/Vulkan 引擎的构建 + 运行镜像。
