@@ -44,10 +44,40 @@ services:
   # ==========================================
   # GPU 0 (7900 XTX): vLLM 推理引擎 (2026 SOTA 架构)
   # ==========================================
+  # ==========================================
+  # GPU 0 (7900 XTX): llama.cpp + Vulkan (取代 vLLM/ROCm)
+  # 实测同卡同模型: decode 35k 上 1.7 -> 70 tok/s, 窗口 49k -> 131k
+  # ==========================================
+  llamacpp-qwen:
+    image: ghcr.io/ggml-org/llama.cpp:server-vulkan
+    container_name: llamacpp_qwen
+    profiles: ["translator"]
+    ports:
+      - "8000:8080"
+    devices:
+      - "/dev/dri:/dev/dri"
+    group_add:
+      - "44"   # video
+      - "992"   # render  (名字在容器内不存在, 必须用数字 GID)
+    environment:
+      - GGML_VK_VISIBLE_DEVICES=0
+    volumes:
+      - ~/.cache/huggingface/hub:/models/hub
+    entrypoint: ["/app/llama-server"]
+    command: >
+      -m /models/hub/models--unsloth--Qwen3.8-27B-GGUF/snapshots/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_M.gguf
+      --mmproj /models/hub/models--unsloth--Qwen3.8-27B-GGUF/snapshots/4ca720788d1e01f1bff70c033e0d0028fd02e502/mmproj-F16.gguf
+      -md /models/hub/models--unsloth--Qwen3.8-27B-GGUF/snapshots/4ca720788d1e01f1bff70c033e0d0028fd02e502/MTP/mtp-Qwen3.8-27B-Q4_0.gguf
+      -ngld 99 --spec-draft-n-max 3
+      -ngl 99 -c 131072
+      --cache-type-k q8_0 --cache-type-v q8_0 -fa on
+      --alias qwen3 --host 0.0.0.0 --port 8080 -np 1 --no-mmap
+    restart: unless-stopped
+
   vllm-qwen:
+    profiles: ["legacy"]   # 回退用: docker compose --profile legacy up -d vllm-qwen
     image: vllm/vllm-openai-rocm:latest #for support of --reasoning-config, it gets dropped on latest nightly
     container_name: vllm_qwen
-    profiles: ["translator"]
     ports:
       - "8000:8000"
     devices:
@@ -70,9 +100,13 @@ services:
     command: >
       vllm serve sokada4/Qwen3.8-27B-GPTQ-Int4
       --dtype float16
-      --max-model-len 12288
-      --gpu-memory-utilization 0.95
-      --max-num-seqs 16
+      --max-model-len 70400
+      --kv-cache-dtype fp8
+      --enable-prefix-caching
+      --mamba-ssm-cache-dtype float16
+      --mamba-block-size 128
+      --gpu-memory-utilization 0.97
+      --max-num-seqs 2
       --chat-template /app/thinking.jinja
       --served-model-name qwen3
       --trust-remote-code
