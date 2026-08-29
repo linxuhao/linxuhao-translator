@@ -53,7 +53,12 @@ async def asr_transcribe_with_language(client: httpx.AsyncClient, wav_bytes: byt
     """使用 vLLM /v1/audio/transcriptions API 指定语言转录"""
     try:
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-        data = {"model": ASR_MODEL_NAME, "language": language, "temperature": temperature}
+        # 锚定语种的字段是 to_language, 不是 language。vLLM 的 Qwen3-ASR 只读前者
+        # (qwen3_asr.py:get_generation_prompt 用它预填 "language {Lang}<asr_text>" 强制语种);
+        # language 是通用 STT 协议里的源语言提示, Qwen3-ASR 根本不看。实测 language=zh
+        # 与不传任何参数逐字相同 —— 也就是说这里的三路并发, 有两路一直只是
+        # temperature 不同的自动检测, 注释里写的"锚定母语/捕外文专名"从未生效。
+        data = {"model": ASR_MODEL_NAME, "to_language": language, "temperature": temperature}
 
         asr_resp = await client.post(ASR_TRANSCRIBE_URL, files=files, data=data, timeout=ASR_TIMEOUT)
 
