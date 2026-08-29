@@ -10,6 +10,6 @@ USER root
 RUN apt-get update && apt-get install -y ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
 
 #2. 安装 Python 层面的音频接口库
-RUN pip install --no-cache-dir soundfile librosa
+RUN pip install --no-cache-dir soundfile librosa av
 
 
