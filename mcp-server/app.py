@@ -23,6 +23,7 @@
 # ==========================================
 import asyncio
 import io
+import re
 import os
 import uuid
 import base64
@@ -248,7 +249,16 @@ async def call_asr(content: list) -> str:
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         resp = await client.post(ASR_URL, json=payload, headers=headers)
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
+
+    # Qwen3-ASR 的原生输出带一层信封: "language Chinese<asr_text>正文"。
+    # 走 /v1/audio/transcriptions 时 vLLM 会自己剥 (qwen3_asr.py:post_process_output),
+    # 但我们走的是 chat/completions —— 那条路径原样透传, 所以得自己剥。
+    # gateway 的 translation.py / record.py / tutor.py 三个调用方都剥了, 只有这里漏了,
+    # 于是 transcribe_audio 一直把 "language Chinese<asr_text>您好…" 整条返给调用方。
+    match = re.match(r"^\s*language\s+([A-Za-z]+)\s*<asr_text>\s*(.*)",
+                     raw, re.IGNORECASE | re.DOTALL)
+    return match.group(2).strip() if match else raw
 
 
 async def call_vllm(content: list, max_tokens: int = 2048, timeout: float = TIMEOUT) -> str:
