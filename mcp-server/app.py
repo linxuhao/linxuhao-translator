@@ -1394,7 +1394,7 @@ class _TokenGate:
             if EXTERNAL_TOKEN and headers.get("cf-ray"):
                 token = headers.get("x-aitelier-mcp-external-token", "")
                 if not (token and hmac.compare_digest(token, EXTERNAL_TOKEN)):
-                    body = b'{"error": "denied: requires the MCP external token"}'
+                    body = b'{"error": "denied: unauthorized"}'
                     await send({
                         "type": "http.response.start",
                         "status": 401,
