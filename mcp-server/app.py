@@ -1405,6 +1405,23 @@ async def serve_subject_image(request: Request):
 
 
 # ==========================================
+# 游戏素材工作流 prompt (prompts/list 可见)
+# ==========================================
+@mcp.prompt(name="game_asset_workflow",
+            description="How to produce consistent game assets (characters, props, sounds)")
+def _game_asset_workflow_prompt() -> str:
+    return (
+        "生成外观/音色一致的素材时:\n"
+        "角色/道具: create_character / create_object 定妆一次 → 之后每张用 subject_image (换场景/换装不换脸)。\n"
+        "动物/坐骑: create_animal。\n"
+        "NPC 对白: create_actor 铸声一次 → 之后每句用 actor_tts (音色不漂)。\n"
+        "精灵图: 定妆图或 subject_image → remove_bg 抠成真 RGBA → slice_sheet 切帧。\n"
+        "程序化音效: gen_sfx (毫秒级, 同 seed 可复现)。\n"
+        "一次性旁白才用 generate_speech (跨句音色会漂); 一次性图才用 generate_image (每张外观会变)。"
+    )
+
+
+# ==========================================
 # 启动服务器
 # ==========================================
 class _TokenGate:
