@@ -27,6 +27,7 @@ import re
 import os
 import uuid
 import base64
+import hmac
 
 import httpx
 from starlette.requests import Request
@@ -45,7 +46,20 @@ ASR_URL = os.getenv("ASR_URL", "http://qwen3_asr:8000/v1/chat/completions")
 ASR_MODEL = os.getenv("ASR_MODEL_NAME", "qwen3-asr")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
-SEARXNG_URL = os.getenv("SEARXNG_URL", "http://linxuhaserver:8888/search")
+# 公网门禁: 设了这个 token 后, 凡带 Cf-Ray 头的请求 (即经 Cloudflare 隧道进来的)
+# 都要带匹配的 X-AItelier-MCP-External-Token 头才能用 —— 覆盖 MCP 工具和 /upload/*
+# REST 端点。off-tunnel (docker 网络 / Tailscale / loopback) 的调用不受影响。
+EXTERNAL_TOKEN = os.getenv("AITELIER_MCP_EXTERNAL_TOKEN", "").strip()
+
+# Host 白名单: Host 头不在这里的请求直接 421 (连 token 都不看)。默认只含通用名 ——
+# 机器特定的 hostname (Tailscale 主机名 / 公网域名) 一律经 MCP_ALLOWED_HOSTS 从环境
+# 注入, 不写死在源码里 (public repo, 别泄露内部主机名)。
+_DEFAULT_ALLOWED_HOSTS = {"localhost", "127.0.0.1", "mcp_server"}
+ALLOWED_HOSTS = _DEFAULT_ALLOWED_HOSTS | {
+    h.strip() for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()
+}
+
+SEARXNG_URL = os.getenv("SEARXNG_URL", "")
 
 MEDIA_GEN_URL = os.getenv("MEDIA_GEN_URL", "http://media_gen:9010")
 # 供 agent 下载文件的公开 URL (远程部署时指向模型机的 Tailscale IP)
@@ -1347,6 +1361,53 @@ async def _parse_media_items(image_urls: list[str], audio_urls: list[str]) -> li
 # ==========================================
 # 启动服务器
 # ==========================================
+class _TokenGate:
+    """纯 ASGI 中间件: 先验 Host 白名单, 再在公网边缘 (Cf-Ray) 验 token。
+
+    1. Host 不在白名单 → 直接 421 (和 AItelier 一样), 连 token 都不看。
+    2. Host 在白名单、且带 Cf-Ray (经 Cloudflare 隧道)、且配了 EXTERNAL_TOKEN
+       → 要求匹配的 X-AItelier-MCP-External-Token 头。
+    3. off-tunnel (docker 网络 / Tailscale / loopback) 不受影响。
+    用纯 ASGI 而不是 BaseHTTPMiddleware, 为了不缓冲 streamable HTTP (SSE) 响应。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                       for k, v in scope.get("headers", [])}
+            host = headers.get("host", "").split(":")[0]
+            if host not in ALLOWED_HOSTS:
+                body = b"Invalid Host header"
+                await send({
+                    "type": "http.response.start",
+                    "status": 421,
+                    "headers": [
+                        (b"content-type", b"text/plain"),
+                        (b"content-length", str(len(body)).encode("latin-1")),
+                    ],
+                })
+                await send({"type": "http.response.body", "body": body})
+                return
+            if EXTERNAL_TOKEN and headers.get("cf-ray"):
+                token = headers.get("x-aitelier-mcp-external-token", "")
+                if not (token and hmac.compare_digest(token, EXTERNAL_TOKEN)):
+                    body = b'{"error": "denied: requires the MCP external token"}'
+                    await send({
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode("latin-1")),
+                        ],
+                    })
+                    await send({"type": "http.response.body", "body": body})
+                    return
+        await self.app(scope, receive, send)
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -1375,4 +1436,4 @@ if __name__ == "__main__":
     print("  gen_sfx(preset=..., seed?, base_freq?, wave?, overrides?)")
     print("=" * 60)
 
-    uvicorn.run(mcp.http_app(), host="0.0.0.0", port=9003)
+    uvicorn.run(_TokenGate(mcp.http_app()), host="0.0.0.0", port=9003)

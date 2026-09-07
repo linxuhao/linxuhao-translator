@@ -33,12 +33,12 @@ services:
     volumes:
       - ./gateway/app:/app
     environment:
-      - BRAIN_ENGINE_URL=${BRAIN_ENGINE_URL:-http://linxuhao-ai:8000/v1/chat/completions}
-      - ASR_ENGINE_URL=${ASR_ENGINE_URL:-http://linxuhao-ai:9000/v1/chat/completions}
-      - ASR_TRANSCRIBE_URL=${ASR_TRANSCRIBE_URL:-http://linxuhao-ai:9000/v1/audio/transcriptions}
+      - BRAIN_ENGINE_URL=${BRAIN_ENGINE_URL:-}
+      - ASR_ENGINE_URL=${ASR_ENGINE_URL:-}
+      - ASR_TRANSCRIBE_URL=${ASR_TRANSCRIBE_URL:-}
     # 容器内不走 Tailscale MagicDNS, 所以显式映射 AI 机。
     extra_hosts:
-      - "linxuhao-ai:${LINXUHAO_AI_IP:-100.68.74.107}"
+      - "linxuhao-ai:${LINXUHAO_AI_IP}"
     restart: unless-stopped
 
   # ==========================================
@@ -163,15 +163,19 @@ services:
       # 用容器内主机名 (qwen3_asr / media_gen) 只在同机时成立 —— 实测跨机 curl 返回 000。
       # 跨机形式两台机都通 (AI 机上它指向自己的 Tailscale 地址, 正好是发布出来的端口),
       # 所以不需要任何 override 文件。
-      - ASR_URL=${ASR_URL:-http://linxuhao-ai:9000/v1/chat/completions}
-      - VLLM_URL=${VLLM_URL:-http://linxuhao-ai:8000/v1/chat/completions}
-      - SEARXNG_URL=${SEARXNG_URL:-http://linxuhaserver:8888/search}
-      - MEDIA_GEN_URL=${MEDIA_GEN_URL:-http://linxuhao-ai:9010}
+      - ASR_URL=${ASR_URL:-}
+      - VLLM_URL=${VLLM_URL:-}
+      - SEARXNG_URL=${SEARXNG_URL:-}
+      - MEDIA_GEN_URL=${MEDIA_GEN_URL:-}
       # 工具返回给调用方的下载 URL 前缀, 必须是调用方能解析的地址
-      - MEDIA_GEN_PUBLIC_URL=${MEDIA_GEN_PUBLIC_URL:-http://linxuhao-ai:9010}
+      - MEDIA_GEN_PUBLIC_URL=${MEDIA_GEN_PUBLIC_URL:-}
+      # 公网门禁: 经 Cloudflare 隧道 (agentmcp.linxuhao.app) 进来时要求的 token。
+      - AITELIER_MCP_EXTERNAL_TOKEN=${AITELIER_MCP_EXTERNAL_TOKEN:-}
+      # Host 白名单: 经隧道暴露时的公网 hostname (逗号分隔扩展)。
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
     # 容器内不走 Tailscale MagicDNS, 所以显式映射 AI 机。
     extra_hosts:
-      - "linxuhao-ai:${LINXUHAO_AI_IP:-100.68.74.107}"
+      - "linxuhao-ai:${LINXUHAO_AI_IP}"
     restart: unless-stopped
 
   # ==========================================
