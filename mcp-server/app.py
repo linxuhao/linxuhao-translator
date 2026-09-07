@@ -28,10 +28,11 @@ import os
 import uuid
 import base64
 import hmac
+import contextvars
 
 import httpx
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from fastmcp import FastMCP
 from PIL import Image
 from cachetools import LRUCache
@@ -62,9 +63,18 @@ ALLOWED_HOSTS = _DEFAULT_ALLOWED_HOSTS | {
 SEARXNG_URL = os.getenv("SEARXNG_URL", "")
 
 MEDIA_GEN_URL = os.getenv("MEDIA_GEN_URL", "http://media_gen:9010")
-# 供 agent 下载文件的公开 URL (远程部署时指向模型机的 Tailscale IP)
+# 供 agent 下载文件的公开 URL (远程部署时指向模型机的 Tailscale IP)。现在只作回退:
+# 下载 URL 前缀跟着请求走 (见 _download_base), 不再固定。
 MEDIA_GEN_PUBLIC_URL = os.getenv("MEDIA_GEN_PUBLIC_URL", MEDIA_GEN_URL)
 MEDIA_GEN_TIMEOUT = 600.0
+
+# 下载 URL 前缀按请求动态决定: 用户用什么 URL 打进来, 就回什么前缀。
+# _TokenGate 在每个请求里设好 (scheme + Host), 工具调 _download_base() 拼下载 URL。
+_REQ_BASE = contextvars.ContextVar("_req_base", default="")
+
+
+def _download_base() -> str:
+    return _REQ_BASE.get() or MEDIA_GEN_PUBLIC_URL
 
 TIMEOUT = 60.0
 
@@ -615,7 +625,7 @@ async def generate_image(prompt: str, width: int = 1024, height: int = 1024, see
     result = await _submit_and_poll(payload)
     if not result["ok"]:
         return f"图片生成失败: {result['error']}"
-    return f"图片已生成: {MEDIA_GEN_PUBLIC_URL}{result['file_url']}"
+    return f"图片已生成: {_download_base()}{result['file_url']}"
 
 
 @mcp.tool()
@@ -634,7 +644,7 @@ async def generate_music(prompt: str, seed: int = None, duration: float = 30.0, 
     result = await _submit_and_poll(payload)
     if not result["ok"]:
         return f"音乐生成失败: {result['error']}"
-    return f"音乐已生成: {MEDIA_GEN_PUBLIC_URL}{result['file_url']} (时长 {duration}s)"
+    return f"音乐已生成: {_download_base()}{result['file_url']} (时长 {duration}s)"
 
 
 @mcp.tool()
@@ -663,7 +673,7 @@ async def generate_speech(text: str, voice: str = None, seed: int = None,
     result = await _submit_and_poll(payload)
     if not result["ok"]:
         return f"语音生成失败: {result['error']}"
-    return f"语音已生成: {MEDIA_GEN_PUBLIC_URL}{result['file_url']}"
+    return f"语音已生成: {_download_base()}{result['file_url']}"
 
 
 @mcp.tool()
@@ -740,7 +750,7 @@ async def _pin_subject(name, appearance, kind, width, height, seed, force, label
     if not r["ok"]:
         return f"定妆失败: {r['error']}"
     return (f"{label} '{r.get('subject', name)}' 已定妆。"
-            f"定妆图: {MEDIA_GEN_PUBLIC_URL}{r.get('reference_url')} —— "
+            f"定妆图: {_download_base()}{r.get('reference_url')} —— "
             f"先看一眼确认是不是你要的, 不满意用 force=True 重定。")
 
 
@@ -779,7 +789,7 @@ async def subject_image(subject: str, scene: str, width: int = 512, height: int 
                                 "width": width, "height": height, "seed": seed})
     if not r["ok"]:
         return f"出图失败: {r['error']}"
-    return f"{subject} 的新图已生成: {MEDIA_GEN_PUBLIC_URL}{r['file_url']}"
+    return f"{subject} 的新图已生成: {_download_base()}{r['file_url']}"
 
 
 @mcp.tool()
@@ -830,7 +840,7 @@ async def create_actor(name: str, voice: str, sample_text: str = None,
         return f"铸声失败: {r['error']}"
     warn = f"\n⚠️ {r['warning']}" if r.get("warning") else ""
     return (f"角色 '{r.get('actor', name)}' 已铸声 (参考音 {r.get('ref_seconds')}s)。"
-            f"试音: {MEDIA_GEN_PUBLIC_URL}{r.get('reference_url')} "
+            f"试音: {_download_base()}{r.get('reference_url')} "
             f"(念的是: {r.get('transcript')})。"
             f"先听一遍确认是不是你要的人, 不满意用 create_actor(..., force=True) 重铸。{warn}")
 
@@ -866,7 +876,7 @@ async def actor_tts(actor: str, text: str, speaking_rate: float = None,
                                 "speaking_rate": speaking_rate, "seed": seed})
     if not r["ok"]:
         return f"配音失败: {r['error']}"
-    return f"{actor} 的台词已生成: {MEDIA_GEN_PUBLIC_URL}{r['file_url']}"
+    return f"{actor} 的台词已生成: {_download_base()}{r['file_url']}"
 
 
 async def _resolve_image_b64(image_base64, image_file_id, image_url):
@@ -956,7 +966,7 @@ async def import_actor(name: str, transcript: str, audio_base64: str = None,
     warn = (f"\n⚠️ 这段录音只有 {lowband} Hz, 低于克隆用的 24 kHz。升采样补不回丢掉的高频, "
             f"音色会比原声闷。有更高采样率的原始文件就换那个。") if lowband else ""
     return (f"角色 '{d['actor']}' 已从录音铸声 ({d['source_format']})。"
-            f"参考音: {MEDIA_GEN_PUBLIC_URL}{d['reference_url']} —— "
+            f"参考音: {_download_base()}{d['reference_url']} —— "
             f"先用 actor_tts 试一句, 确认克隆出来的音色对不对。{warn}")
 
 
@@ -995,7 +1005,7 @@ async def import_subject(name: str, appearance: str, kind: str = "character",
     size = (f"原图 {d['source_size']} → 存为 {d['stored_size']}"
             if d.get("resized") else d["source_size"])
     return (f"{d['kind']} '{d['subject']}' 已用现成图定妆 ({size})。"
-            f"定妆图: {MEDIA_GEN_PUBLIC_URL}{d['reference_url']} —— "
+            f"定妆图: {_download_base()}{d['reference_url']} —— "
             f"先用 subject_image 出一张试试, 确认外观跟得住。")
 
 
@@ -1032,7 +1042,7 @@ async def remove_bg(image_base64: str = None, image_file_id: str = None, image_u
     data = r.json()
     branch = data.get("mode_used", mode)
     model = f"/{data['model']}" if data.get("model") else ""
-    out = (f"背景已移除: {MEDIA_GEN_PUBLIC_URL}{data['file_url']} "
+    out = (f"背景已移除: {_download_base()}{data['file_url']} "
            f"(分支 {branch}{model}, 透明像素占比 {data['transparent_ratio']:.1%})")
     if data.get("warning"):
         out += f"\n⚠️ {data['warning']}"
@@ -1064,7 +1074,7 @@ async def slice_sheet(image_base64: str = None, image_file_id: str = None, image
         r = await client.post(f"{MEDIA_GEN_URL}/v1/slice_sheet", json=payload)
     if r.status_code != 200:
         return f"切图失败: {r.text[:300]}"
-    urls = [f"{MEDIA_GEN_PUBLIC_URL}{u}" for u in r.json()["file_urls"]]
+    urls = [f"{_download_base()}{u}" for u in r.json()["file_urls"]]
     return f"已切出 {len(urls)} 帧:\n" + "\n".join(urls)
 
 
@@ -1235,7 +1245,7 @@ async def gen_sfx(preset: str = "select", seed: int = None, base_freq: float = N
     if r.status_code != 200:
         return f"音效合成失败: {r.text[:300]}"
     data = r.json()
-    return (f"音效已生成: {MEDIA_GEN_PUBLIC_URL}{data['file_url']} "
+    return (f"音效已生成: {_download_base()}{data['file_url']} "
             f"(preset {data['preset']}, seed {data['seed']}, 时长 {data['duration']:.3f}s, "
             f"波形 {data['params']['wave']}, 基频 {data['params']['base_freq']:.0f}Hz)")
 
@@ -1359,6 +1369,42 @@ async def _parse_media_items(image_urls: list[str], audio_urls: list[str]) -> li
 
 
 # ==========================================
+# 媒体文件下载反代: 让下载 URL 走本服务 (agentmcp.linxuhao.app) 而不是 media-gen
+# 的 Tailscale 地址, 这样公网也能取到生成的文件。三个路径原样转发到 MEDIA_GEN_URL,
+# 保持 content-type 和字节不变。
+# ==========================================
+async def _proxy_media(path: str):
+    url = f"{MEDIA_GEN_URL}{path}"
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url)
+    except Exception as e:
+        return JSONResponse({"error": f"media-gen unreachable: {e}"}, status_code=502)
+    if resp.status_code != 200:
+        return JSONResponse({"error": f"media-gen: {resp.status_code}"}, status_code=resp.status_code)
+    return Response(resp.content,
+                    media_type=resp.headers.get("content-type", "application/octet-stream"))
+
+
+@mcp.custom_route("/files/{filename}", methods=["GET"])
+async def serve_file(request: Request):
+    filename = request.path_params["filename"]
+    return await _proxy_media(f"/files/{os.path.basename(filename)}")
+
+
+@mcp.custom_route("/v1/actors/{name}/audio", methods=["GET"])
+async def serve_actor_audio(request: Request):
+    name = request.path_params["name"]
+    return await _proxy_media(f"/v1/actors/{name}/audio")
+
+
+@mcp.custom_route("/v1/subjects/{name}/image", methods=["GET"])
+async def serve_subject_image(request: Request):
+    name = request.path_params["name"]
+    return await _proxy_media(f"/v1/subjects/{name}/image")
+
+
+# ==========================================
 # 启动服务器
 # ==========================================
 class _TokenGate:
@@ -1378,6 +1424,9 @@ class _TokenGate:
         if scope["type"] == "http":
             headers = {k.decode("latin-1").lower(): v.decode("latin-1")
                        for k, v in scope.get("headers", [])}
+            # 记录请求 base (scheme + Host), 供工具拼下载 URL —— 跟着用户用的 URL 走。
+            scheme = headers.get("x-forwarded-proto", scope.get("scheme", "http"))
+            _REQ_BASE.set(f"{scheme}://{headers.get('host', '')}")
             host = headers.get("host", "").split(":")[0]
             if host not in ALLOWED_HOSTS:
                 body = b"Invalid Host header"
