@@ -13,6 +13,7 @@ import os
 from fastapi import APIRouter, UploadFile, File, Form, Header
 from fastapi.responses import StreamingResponse
 import httpx
+from gpu_client import transcribe, gpu_headers, GPU_URL
 
 from routers.user import record_usage, get_user_priority
 from languages import LANGUAGES_ZH, TO_LANGUAGE_CODE
@@ -20,18 +21,11 @@ from languages import LANGUAGES_ZH, TO_LANGUAGE_CODE
 logger = logging.getLogger("gateway.translation")
 router = APIRouter()
 
-BRAIN_URL = os.getenv("BRAIN_ENGINE_URL", "http://vllm_qwen:8000/v1/chat/completions")
 # Transcription API (指定语言)
-ASR_TRANSCRIBE_URL = os.getenv("ASR_TRANSCRIBE_URL", "http://qwen3_asr:8000/v1/audio/transcriptions")
 # Chat Completions API (自动检测语言)
-ASR_CHAT_URL = os.getenv("ASR_ENGINE_URL", "http://qwen3_asr:8000/v1/chat/completions")
-ASR_MODEL_NAME = os.getenv("ASR_MODEL_NAME", "qwen3-asr")
 
 MAX_CONCURRENT_TASKS = 32
 task_queue = asyncio.PriorityQueue()
-
-# ASR 超时配置
-ASR_TIMEOUT = 10.0 # 同传场景缩短超时时间，尽早斩断慢请求
 
 
 async def convert_webm_to_wav(audio_bytes: bytes) -> bytes:
@@ -49,60 +43,25 @@ async def convert_webm_to_wav(audio_bytes: bytes) -> bytes:
         raise
 
 
-async def asr_transcribe_with_language(client: httpx.AsyncClient, wav_bytes: bytes, language: str, temperature: float, worker_id: int) -> dict:
-    """使用 vLLM /v1/audio/transcriptions API 指定语言转录"""
+async def asr_transcribe_with_language(client, wav_bytes, language, temperature, worker_id):
+    """audio.cpp uses the language field; legacy temperature is not forwarded."""
     try:
-        files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-        # 锚定语种的字段是 to_language, 不是 language。vLLM 的 Qwen3-ASR 只读前者
-        # (qwen3_asr.py:get_generation_prompt 用它预填 "language {Lang}<asr_text>" 强制语种);
-        # language 是通用 STT 协议里的源语言提示, Qwen3-ASR 根本不看。实测 language=zh
-        # 与不传任何参数逐字相同 —— 也就是说这里的三路并发, 有两路一直只是
-        # temperature 不同的自动检测, 注释里写的"锚定母语/捕外文专名"从未生效。
-        data = {"model": ASR_MODEL_NAME, "to_language": language, "temperature": temperature}
-
-        asr_resp = await client.post(ASR_TRANSCRIBE_URL, files=files, data=data, timeout=ASR_TIMEOUT)
-
-        if asr_resp.status_code != 200:
-            return {"worker_id": worker_id, "mode": language, "text": "", "detected_lang": language, "error": f"HTTP {asr_resp.status_code}"}
-
-        result = asr_resp.json()
-        text = result.get("text", "").strip()
-
-        return {"worker_id": worker_id, "mode": language, "text": text, "detected_lang": language, "error": None}
+        result=await transcribe(client,wav_bytes,language)
+        return {'worker_id':worker_id,'mode':language,'text':result['text'].strip(),'detected_lang':language,'error':None}
     except Exception as e:
-        return {"worker_id": worker_id, "mode": language, "text": "", "detected_lang": language, "error": str(e)}
+        return {'worker_id':worker_id,'mode':language,'text':'','detected_lang':language,'error':str(e)}
 
-
-async def asr_detect_language(client: httpx.AsyncClient, base64_audio: str, temperature: float, worker_id: int) -> dict:
-    """使用 Chat Completions API 自动检测语言"""
+async def asr_detect_language(client, base64_audio, temperature, worker_id):
     try:
-        asr_payload = {
-            "model": ASR_MODEL_NAME,
-            "messages": [{"role": "user", "content": [{"type": "audio_url", "audio_url": {"url": f"data:audio/wav;base64,{base64_audio}"}}]}],
-            "max_tokens": 128, 
-            "temperature": temperature
-        }
-
-        asr_resp = await client.post(ASR_CHAT_URL, json=asr_payload, timeout=ASR_TIMEOUT)
-        if asr_resp.status_code != 200:
-            return {"worker_id": worker_id, "mode": "detect", "text": "", "detected_lang": "unknown", "error": f"HTTP {asr_resp.status_code}"}
-
-        raw_asr_text = asr_resp.json()["choices"][0]["message"]["content"].strip()
-        asr_text = raw_asr_text
-        detected_lang = "unknown"
-
-        match = re.match(r"^\s*language\s+([A-Za-z]+)\s*<asr_text>\s*(.*)", raw_asr_text, re.IGNORECASE | re.DOTALL)
-        if match:
-            detected_lang = TO_LANGUAGE_CODE.get(match.group(1).lower(), "unknown")
-            asr_text = match.group(2).strip()
-
-        return {"worker_id": worker_id, "mode": "detect", "text": asr_text, "detected_lang": detected_lang, "error": None}
+        result=await transcribe(client,base64.b64decode(base64_audio,validate=True))
+        language=result.get('language') or 'unknown'
+        return {'worker_id':worker_id,'mode':'detect','text':result['text'].strip(),
+                'detected_lang':TO_LANGUAGE_CODE.get(language.lower(),language.lower()),'error':None}
     except Exception as e:
-        return {"worker_id": worker_id, "mode": "detect", "text": "", "detected_lang": "unknown", "error": str(e)}
-
+        return {'worker_id':worker_id,'mode':'detect','text':'','detected_lang':'unknown','error':str(e)}
 
 async def parallel_asr_recognition(client: httpx.AsyncClient, wav_bytes: bytes, native_lang: str, target_lang: str, debug: bool, req_id: str) -> list:
-    """并行 ASR 转录：引入阶梯式 Temperature"""
+    """并发提交两种语言提示与自动检测，由 GPU 服务串行执行"""
     t_asr_start = time.time()
     base64_audio = base64.b64encode(wav_bytes).decode("utf-8")
 
@@ -229,7 +188,7 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
         t_llm_start = time.time()
         full_trans_text = ""
 
-        async with client.stream("POST", BRAIN_URL, json=brain_payload) as r:
+        async with client.stream("POST", GPU_URL+"/engines/translator/v1/chat/completions", json=brain_payload, headers=gpu_headers(), timeout=930) as r:
             async for line in r.aiter_lines():
                 if line.startswith("data: ") and line != "data: [DONE]":
                     try:
