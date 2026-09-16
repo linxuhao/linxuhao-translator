@@ -236,3 +236,6 @@ cache/
 continuity-state/
 # rembg 的 onnx 模型缓存 (几百 MB), 丢了会自动重下。
 continuity-cache/
+
+# 每台机器自己的 compose override，由 deploy/ 下对应的一份复制而来（见 deploy/README.md）
+/docker-compose.override.yml
