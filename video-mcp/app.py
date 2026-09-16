@@ -49,7 +49,13 @@ async def call(action,**arguments):
         transport=httpx.AsyncHTTPTransport(uds=str(STATE/'runtime.sock'))
         async with httpx.AsyncClient(transport=transport,timeout=930) as client:
             response=await client.post('http://video/rpc',json=payload)
-    value=response.json()
+    try:value=response.json()
+    except ValueError:
+        # A failure upstream of the backend's own error envelope — most often the GPU-side
+        # service being down, which returns 500 with a plain-text body. Reporting the parse
+        # failure instead of the response hides exactly the thing worth knowing.
+        raise ValueError('backend returned HTTP %d with a non-JSON body: %s'
+                         %(response.status_code,response.text[:200].strip() or '(empty)'))
     if response.status_code!=200:raise ValueError(value.get('error','backend request failed'))
     def decorate(obj):
         if isinstance(obj,dict):
