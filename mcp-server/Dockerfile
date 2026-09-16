@@ -9,6 +9,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
+COPY gpu_client.py video_tools.py ./
+COPY prompts/ ./prompts/
 
 EXPOSE 9003 9004
 

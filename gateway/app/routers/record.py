@@ -12,23 +12,19 @@ import os
 from fastapi import APIRouter, UploadFile, File, Form, Header
 from fastapi.responses import JSONResponse
 import httpx
+from gpu_client import transcribe, gpu_headers, GPU_URL
 
 from routers.user import record_usage
-from languages import LANGUAGES_ZH
+from languages import LANGUAGES_ZH, TO_LANGUAGE_CODE
 
 logger = logging.getLogger("gateway.record")
 router = APIRouter()
 
-BRAIN_URL = os.getenv("BRAIN_ENGINE_URL", "http://vllm_qwen:8000/v1/chat/completions")
-ASR_URL = os.getenv("ASR_ENGINE_URL", "http://qwen3_asr:8000/v1/chat/completions")
-ASR_TRANSCRIBE_URL = os.getenv("ASR_TRANSCRIBE_URL", "http://qwen3_asr:8000/v1/audio/transcriptions")
-ASR_MODEL_NAME = os.getenv("ASR_MODEL_NAME", "qwen3-asr")
 
 # 🚦 使用信号量代替复杂的队列机制，锁定最大并发
 RECORD_MAX_CONCURRENT = 16
 concurrency_limiter = asyncio.Semaphore(RECORD_MAX_CONCURRENT)
 
-ASR_TIMEOUT = 15.0
 LLM_TIMEOUT = 60.0
 
 def parse_llm_response(full_content: str) -> dict:
@@ -88,57 +84,32 @@ async def convert_webm_to_wav(audio_bytes: bytes) -> bytes:
         logger.error(f"FFmpeg 处理异常: {e}")
         raise
 
-async def asr_transcribe_with_language(client: httpx.AsyncClient, wav_bytes: bytes, language: str, temperature: float, worker_id: int) -> dict:
-    """指定语言抗噪通道 (复用同传逻辑)"""
+async def asr_transcribe_with_language(client, wav_bytes, language, temperature, worker_id):
+    """audio.cpp uses the language field; legacy temperature is not forwarded."""
     try:
-        files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-        # 锚定语种的字段是 to_language, 不是 language。vLLM 的 Qwen3-ASR 只读前者
-        # (qwen3_asr.py:get_generation_prompt 用它预填 "language {Lang}<asr_text>" 强制语种);
-        # language 是通用 STT 协议里的源语言提示, Qwen3-ASR 根本不看。实测 language=zh
-        # 与不传任何参数逐字相同 —— 也就是说这里的三路并发, 有两路一直只是
-        # temperature 不同的自动检测, 注释里写的"锚定母语/捕外文专名"从未生效。
-        data = {"model": ASR_MODEL_NAME, "to_language": language, "temperature": temperature}
-        asr_resp = await client.post(ASR_TRANSCRIBE_URL, files=files, data=data, timeout=ASR_TIMEOUT)
-        if asr_resp.status_code != 200: 
-            return {"worker_id": worker_id, "mode": language, "text": "", "detected_lang": language, "error": f"HTTP {asr_resp.status_code}"}
-        
-        return {"worker_id": worker_id, "mode": language, "text": asr_resp.json().get("text", "").strip(), "detected_lang": language, "error": None}
+        result=await transcribe(client,wav_bytes,language)
+        return {'worker_id':worker_id,'mode':language,'text':result['text'].strip(),'detected_lang':language,'error':None}
     except Exception as e:
-        return {"worker_id": worker_id, "mode": language, "text": "", "detected_lang": language, "error": str(e)}
+        return {'worker_id':worker_id,'mode':language,'text':'','detected_lang':language,'error':str(e)}
 
-async def asr_detect_language(client: httpx.AsyncClient, base64_audio: str, temperature: float, worker_id: int) -> dict:
-    """自由检测通道 (捕捉突然的语种切换)"""
+async def asr_detect_language(client, base64_audio, temperature, worker_id):
     try:
-        asr_payload = {
-            "model": ASR_MODEL_NAME,
-            "messages": [{"role": "user", "content": [{"type": "audio_url", "audio_url": {"url": f"data:audio/wav;base64,{base64_audio}"}}]}],
-            "max_tokens": 256, "temperature": temperature
-        }
-        asr_resp = await client.post(ASR_URL, json=asr_payload, timeout=ASR_TIMEOUT)
-        if asr_resp.status_code != 200: 
-            return {"worker_id": worker_id, "mode": "detect", "text": "", "detected_lang": "unknown", "error": f"HTTP {asr_resp.status_code}"}
-            
-        raw_asr_text = asr_resp.json()["choices"][0]["message"]["content"].strip()
-        asr_text = raw_asr_text
-        detected_lang = "unknown"
-        match = re.match(r"^\s*language\s+([A-Za-z]+)\s*<asr_text>\s*(.*)", raw_asr_text, re.IGNORECASE | re.DOTALL)
-        if match:
-            detected_lang = match.group(1).lower()
-            asr_text = match.group(2).strip()
-            
-        return {"worker_id": worker_id, "mode": "detect", "text": asr_text, "detected_lang": detected_lang, "error": None}
+        result=await transcribe(client,base64.b64decode(base64_audio,validate=True))
+        language=result.get('language') or 'unknown'
+        return {'worker_id':worker_id,'mode':'detect','text':result['text'].strip(),
+                'detected_lang':TO_LANGUAGE_CODE.get(language.lower(),language.lower()),'error':None}
     except Exception as e:
-        return {"worker_id": worker_id, "mode": "detect", "text": "", "detected_lang": "unknown", "error": str(e)}
+        return {'worker_id':worker_id,'mode':'detect','text':'','detected_lang':'unknown','error':str(e)}
 
 async def parallel_asr_recognition(client: httpx.AsyncClient, wav_bytes: bytes, target_translation_lang: str, target_lang: str, debug: bool, req_id: str) -> list:
-    """3路火力全开：母语强锚定 + 目标语抗噪 + 自由探测"""
+    """并发提交两种语言提示与自动检测，由 GPU 服务串行执行"""
     t_asr_start = time.time()
     base64_audio = base64.b64encode(wav_bytes).decode("utf-8")
     
     tasks = [
-        asr_transcribe_with_language(client, wav_bytes, target_translation_lang, 0.2, 0), # T=0.2 锚定母语
-        asr_transcribe_with_language(client, wav_bytes, target_lang, 0.5, 1), # T=0.5 捕捉外文专有名词
-        asr_detect_language(client, base64_audio, 0.8, 2)                     # T=0.8 兜底发散变体
+        asr_transcribe_with_language(client, wav_bytes, target_translation_lang, 0.2, 0),
+        asr_transcribe_with_language(client, wav_bytes, target_lang, 0.5, 1),
+        asr_detect_language(client, base64_audio, 0.8, 2)
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
@@ -261,7 +232,7 @@ async def record_endpoint(
                 
                 t_llm_start = time.time()
                 
-                brain_resp = await client.post(BRAIN_URL, json=brain_payload, timeout=LLM_TIMEOUT)
+                brain_resp = await client.post(GPU_URL+"/engines/translator/v1/chat/completions", json=brain_payload, headers=gpu_headers(), timeout=930)
                 if brain_resp.status_code != 200:
                     raise Exception(f"LLM 报错 HTTP {brain_resp.status_code}")
                     

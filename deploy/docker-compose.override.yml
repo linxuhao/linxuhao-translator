@@ -1,0 +1,17 @@
+services:
+  mcp-server:
+    build: /home/linxuhao/vip-gateway-unified/mcp-server
+    environment:
+      GPU_SERVICE_URL: http://linxuhao-ai:9041
+      VIDEO_PUBLIC_URL: https://agentmcp.linxuhao.app
+    volumes:
+      - /home/linxuhao/.local/state/vip-gpu/GPU_API_TOKEN:/run/secrets/GPU_API_TOKEN:ro
+  gateway:
+    environment:
+      GPU_SERVICE_URL: http://linxuhao-ai:9041
+    volumes:
+      - /home/linxuhao/.local/state/vip-gpu/GPU_API_TOKEN:/run/secrets/GPU_API_TOKEN:ro
+      - /home/linxuhao/vip-gateway-unified/gateway/app/gpu_client.py:/app/gpu_client.py:ro
+      - /home/linxuhao/vip-gateway-unified/gateway/app/routers/translation.py:/app/routers/translation.py:ro
+      - /home/linxuhao/vip-gateway-unified/gateway/app/routers/record.py:/app/routers/record.py:ro
+      - /home/linxuhao/vip-gateway-unified/gateway/app/routers/tutor.py:/app/routers/tutor.py:ro

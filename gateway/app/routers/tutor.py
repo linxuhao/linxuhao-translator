@@ -11,6 +11,7 @@ import os
 from fastapi import APIRouter, UploadFile, File, Form, Header
 from fastapi.responses import StreamingResponse
 import httpx
+from gpu_client import transcribe, gpu_headers, GPU_URL
 
 from routers.user import record_usage, get_user_priority
 from languages import LANGUAGES_ZH, TO_LANGUAGE_CODE
@@ -18,9 +19,6 @@ from languages import LANGUAGES_ZH, TO_LANGUAGE_CODE
 logger = logging.getLogger("gateway.tutor")
 router = APIRouter()
 
-BRAIN_URL = os.getenv("BRAIN_ENGINE_URL", "http://vllm_qwen:8000/v1/chat/completions")
-ASR_URL = os.getenv("ASR_ENGINE_URL", "http://qwen3_asr:8000/v1/chat/completions")
-ASR_MODEL_NAME = os.getenv("ASR_MODEL_NAME", "qwen3-asr") 
 
 TUTOR_MAX_CONCURRENT = 32
 tutor_task_queue = asyncio.PriorityQueue()
@@ -56,23 +54,8 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         # Step 1: ASR 听写 (外教模式不强制要求 LID，但直接复用多模态接口)
         # ----------------------------------------
         t_asr_start = time.time()
-        asr_payload = {
-            "model": ASR_MODEL_NAME,
-            "messages": [{"role": "user", "content": [{"type": "audio_url", "audio_url": {"url": f"data:audio/wav;base64,{base64_audio}"}}]}],
-            "max_tokens": 256,
-            "temperature": 0.0
-        }
-        
-        asr_resp = await client.post(ASR_URL, json=asr_payload, timeout=10.0)
-        if asr_resp.status_code != 200: raise Exception(f"ASR Error: {asr_resp.text}")
-            
-        raw_asr_text = asr_resp.json()["choices"][0]["message"]["content"].strip()
-        
-        # 剥离语种前缀
-        asr_text = raw_asr_text
-        match = re.match(r"^\s*language\s+([A-Za-z]+)\s*<asr_text>\s*(.*)", raw_asr_text, re.IGNORECASE | re.DOTALL)
-        if match: asr_text = match.group(2).strip()
-        
+        asr_text = (await transcribe(client,wav_bytes))['text'].strip()
+
         if debug:
             logger.info(f"[{req_id}] 👨‍🏫 ASR 耗时: {int((time.time() - t_asr_start)*1000)}ms | 文本: '{asr_text}'")
         
@@ -172,7 +155,7 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
         thinking_buffer = ""
         has_started_speaking = False  # 🔒 首字修剪锁
 
-        async with client.stream("POST", BRAIN_URL, json=brain_payload) as r:
+        async with client.stream("POST", GPU_URL+"/engines/translator/v1/chat/completions", json=brain_payload, headers=gpu_headers(), timeout=930) as r:
             async for line in r.aiter_lines():
                 if line.startswith("data: ") and line != "data: [DONE]":
                     try:
