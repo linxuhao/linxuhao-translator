@@ -65,6 +65,38 @@ async def video_project_update(project_id:str,expected_revision:int,data:dict)->
     """Update brief/title/character references, refusing stale revisions."""
     return await call('project_update',project_id=project_id,expected_revision=expected_revision,data=data)
 @mcp.tool
+async def video_stage_set(project_id:str,expected_revision:int,stage:str,status:str,evidence:str='')->dict:
+    """Record where an approval stage stands. status: pending, approved or rejected.
+
+    This is the project's approval state machine — the one structured place for "what is waiting
+    on whom". Anything that fits here belongs here, not in the brief and not in the driver note.
+    """
+    return await call('stage_set',project_id=project_id,expected_revision=expected_revision,stage=stage,status=status,evidence=evidence)
+@mcp.tool
+async def video_note_get(project_id:str)->dict:
+    """Read the project's two-section director note plus its own revision.
+
+    `permanent` holds durable context for this production: decisions and why, identity rules,
+    what the user has vetoed. `temporary` holds the current handoff. `temporary_stale` means the
+    stage that section was written against has moved on — re-read and rewrite it, never assume it.
+    """
+    return await call('note_get',project_id=project_id)
+@mcp.tool
+async def video_note_update(project_id:str,expected_revision:int,section:str,text:str,operation:str='replace',stage:str='')->dict:
+    """Write one note section under compare-and-swap. section: permanent or temporary; operation: replace or append.
+
+    The note carries what no field can hold: why a shot changed approach, what the user rejected
+    and why, what this round is testing. Anything that fits `video_stage_set` goes there instead.
+    Give `stage` when writing `temporary` to tie it to an approval stage, so it can report itself
+    stale later. Limits are 16000 chars permanent / 4000 temporary; trimming is safe because every
+    revision is kept in the append-only history.
+    """
+    return await call('note_update',project_id=project_id,expected_revision=expected_revision,section=section,text=text,operation=operation,stage=stage)
+@mcp.tool
+async def video_note_history(project_id:str)->list:
+    """List every committed note revision, oldest first. Append-only; enforced by the database."""
+    return await call('note_history',project_id=project_id)
+@mcp.tool
 async def video_import_image(image_base64:str,source:str='user upload')->dict:
     """Import an approved image (maximum 20MiB); returns a content-addressed asset ID."""
     return await call('asset_import',image_base64=image_base64,source=source)
@@ -72,6 +104,16 @@ async def video_import_image(image_base64:str,source:str='user upload')->dict:
 async def video_shot_put(project_id:str,prompt:str,title:str='',image:str|None=None,frames:int=124,shot_id:str|None=None,expected_revision:int=0,last_frame:str|None=None,references:list[str]|None=None,resolution:str='preview')->dict:
     """Create/update a shot. Image is the first-frame asset ID; last_frame is optional, including last-only. References is an ordered list of 1..4 asset IDs using Ref2VA; cannot mix with first/last. Editing clears selection but preserves historical takes. Resolution preview=608x352 or 768p=1344x768; frames=17*k+5, 22..124."""
     return await call('shot_put',project_id=project_id,shot_id=shot_id,expected_revision=expected_revision,data={'prompt':prompt,'title':title,'image':image,'frames':frames,'last_frame':last_frame,'references':references or [],'resolution':resolution})
+@mcp.tool
+async def video_shot_annotate(shot_id:str,meta:dict)->dict:
+    """Attach narrative metadata to a shot: beat, role, scale, intended hold, eyeline, props, notes.
+
+    Annotation never reaches the model. It is stored apart from the generation fields, so it does
+    not revise the shot, does not clear a selected take, and cannot change a render's idempotency
+    key or its recorded conditioning. Use free vocabulary that suits this production; the metadata
+    exists so a later reader can see the shot's intent, not to satisfy a fixed taxonomy.
+    """
+    return await call('shot_annotate',shot_id=shot_id,meta=meta)
 @mcp.tool
 async def video_render_shot(shot_id:str,expected_revision:int,request_key:str,profile:str='standard',seed:int=42)->dict:
     """Queue an immutable candidate take; returns immediately. Reuse request_key only for an identical retry. Profiles: standard=20; turbo=8 for FL2VA or 4 for Ref2VA preview. Ref2VA 768p requires standard; no automatic selection."""
@@ -96,6 +138,15 @@ async def video_job_cancel(job_id:str)->dict:
 async def video_take_select(shot_id:str,take_id:str,expected_revision:int)->dict:
     """Select the user's chosen completed take for a current shot revision."""
     return await call('take_select',shot_id=shot_id,take_id=take_id,expected_revision=expected_revision)
+@mcp.tool
+async def video_take_reject(take_id:str,reason:str)->dict:
+    """Record that the user rejected a take, with the reason. Clears it if it was selected.
+
+    A rejected take is never deleted — the file, its parameters and its provenance stay — but it
+    cannot be selected again while the rejection stands. Pass an empty reason to clear a rejection;
+    that does not reselect anything.
+    """
+    return await call('take_reject',take_id=take_id,reason=reason)
 @mcp.tool
 async def video_assemble(project_id:str,shot_ids:list[str],request_key:str)->dict:
     """Queue CPU assembly of only selected takes in explicit shot order; outputs H.264/AAC and an immutable edit manifest."""
