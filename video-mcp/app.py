@@ -12,7 +12,7 @@ from starlette.responses import FileResponse, JSONResponse
 STATE=Path(os.getenv('VIDEO_STATE','/state'))
 PUBLIC=os.getenv('VIDEO_PUBLIC_URL','http://127.0.0.1:9041').rstrip('/')
 HOST_STATE=os.getenv('VIDEO_HOST_STATE','/home/linxuhao/h3-conditioning-bridge/video-state')
-mcp=FastMCP('VideoMCP',instructions='Use the video_generation_workflow MCP prompt for the complete production workflow, suitable for any capable agent. The calling agent directs the film. Prefer its built-in advanced image generation tools, such as Codex imagegen; use AgentMCP image generation only when no such built-in capability is available. Reuse approved character assets independently of generator choice, then import approved keyframes here. Create projects and versioned shots, render standard (20 steps) or turbo (FL2VA 8 steps, Ref2VA preview 4 steps) asynchronously. Present candidate clips to the user; select only their chosen takes, then assemble an explicitly ordered shot list. V2 supports T2V, first/last frames, or 1..4 ordered reference images; preview 608x352 or native 1344x768, up to 124 frames. Ref2VA 768p uses standard only. Do not mix reference images with first/last frames. I2V conditioning parity is experimental. GPU models are automatically scheduled. GPU0 handles auxiliary engines and the H3 encoder; GPU1 retains H3. Queued auxiliary work precedes the next video. No lip-sync or reference-video/audio support.')
+mcp=FastMCP('VideoMCP',instructions='Use the video_generation_workflow MCP prompt for the complete production workflow, suitable for any capable agent. Read the video_prompting_h3 MCP prompt before writing shot prompts: identity anchoring across cuts, playable action, audio description and interface limits. Both prompts hold only technique that is true across productions; a given film\'s style, rejections and thresholds belong to that project\'s own record, never to the shared prompts. The calling agent directs the film. Prefer its built-in advanced image generation tools, such as Codex imagegen; use AgentMCP image generation only when no such built-in capability is available. Reuse approved character assets independently of generator choice, then import approved keyframes here. Create projects and versioned shots, render standard (20 steps) or turbo (FL2VA 8 steps, Ref2VA preview 4 steps) asynchronously. Present candidate clips to the user; select only their chosen takes, then assemble an explicitly ordered shot list. V2 supports T2V, first/last frames, or 1..4 ordered reference images; preview 608x352 or native 1344x768, up to 124 frames. Ref2VA 768p uses standard only. Do not mix reference images with first/last frames. I2V conditioning parity is experimental. GPU models are automatically scheduled. GPU0 handles auxiliary engines and the H3 encoder; GPU1 retains H3. Queued auxiliary work precedes the next video. No lip-sync or reference-video/audio support.')
 
 @mcp.prompt
 async def video_generation_workflow(brief:str='',project_id:str='')->str:
@@ -24,6 +24,14 @@ async def video_generation_workflow(brief:str='',project_id:str='')->str:
     """
     template=(Path(__file__).parent/'prompts/video_generation_workflow.md').read_text()
     return template+'\n\n## 本次输入\n'+json.dumps({'brief':brief,'project_id':project_id},ensure_ascii=False)
+
+@mcp.prompt
+async def video_prompting_h3()->str:
+    """写 H3 镜头提示词的通用技法：身份锚定、可演的动作、声音描述与接口硬约束。
+
+    只含跨作品为真的技法；某一部片的风格与否决属于该项目自身的记录，不在此处。
+    """
+    return (Path(__file__).parent/'prompts/h3_prompting.md').read_text()
 
 async def call(action,**arguments):
     transport=httpx.AsyncHTTPTransport(uds=str(STATE/'runtime.sock'))
