@@ -1,0 +1,37 @@
+# VideoMCP's MCP facade, running on linxuhaserver — the MCP interface layer — while the GPU
+# work stays on linxuhao-ai. This mirrors how mcp-server already reaches ASR, vLLM and
+# media-gen across the two machines.
+#
+#   docker compose -f docker-compose.videomcp.yml up -d
+#
+# Nothing on linxuhao-ai changes. Its own video_mcp keeps serving 9041 (/rpc, /engines, /files)
+# over the unix socket, because continuity_mcp depends on exactly that
+# (SD_SERVER=http://video_mcp:9041/engines/sd). This instance is an additional client of it.
+#
+# The image is loaded, not built: the source lives on the codex/video-mcp branch checked out on
+# linxuhao-ai. Refresh it with
+#   ssh linxuhao-ai "docker save vip-gateway-video-video-mcp:latest | gzip -1" | gunzip | docker load
+# Pushing that branch and building here would be the cleaner long-term arrangement.
+
+services:
+  video-mcp-facade:
+    image: vip-gateway-video-video-mcp:latest
+    container_name: video_mcp_facade
+    # No GPU, no devices, no state mount — like media-gen, this shell runs no GPU code.
+    environment:
+      # Every call becomes an authenticated POST to the GPU-side instance instead of a socket.
+      VIDEO_GPU_RPC: http://${GPU_HOST:-linxuhao-ai}:9041/rpc
+      GPU_TOKEN_FILE: /run/secrets/gpu-api.token
+      # Download URLs must be resolvable by whoever receives them, so they keep pointing at the
+      # machine that actually holds the files — the same rule as MEDIA_GEN_PUBLIC_URL.
+      VIDEO_PUBLIC_URL: https://agentmcp.linxuhao.app/video
+      VIDEO_HOST_STATE: ${BRIDGE_ROOT:-/home/linxuhao/h3-conditioning-bridge}/video-state
+    volumes:
+      - ${VIP_SECRETS_DIR:-/home/linxuhao/.vip-secrets}/gpu-api.token:/run/secrets/gpu-api.token:ro
+    # Containers here do not use Tailscale MagicDNS, so the AI machine is mapped explicitly —
+    # the same reason mcp-server carries this line.
+    extra_hosts:
+      - "${GPU_HOST:-linxuhao-ai}:${LINXUHAO_AI_IP:-100.68.74.107}"
+    ports:
+      - "127.0.0.1:9042:9041"
+    restart: unless-stopped
