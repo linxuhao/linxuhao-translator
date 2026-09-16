@@ -5,39 +5,39 @@ services:
     container_name: video_mcp
     profiles: [video]
     networks: [video-control, gpu-control]
-    ports: ["127.0.0.1:9041:9041", "100.68.74.107:9041:9041"]
+    ports: ["127.0.0.1:9041:9041", "${LINXUHAO_AI_IP:-100.68.74.107}:9041:9041"]
     volumes:
-      - /home/linxuhao/h3-conditioning-bridge/video-state:/state
+      - ${BRIDGE_ROOT:-/home/linxuhao/h3-conditioning-bridge}/video-state:/state
     environment:
       GPU_TRUSTED_CLIENTS: 172.31.94.3
       VIDEO_PUBLIC_URL: https://agentmcp.linxuhao.app/video
-      VIDEO_HOST_STATE: /home/linxuhao/h3-conditioning-bridge/video-state
+      VIDEO_HOST_STATE: ${BRIDGE_ROOT:-/home/linxuhao/h3-conditioning-bridge}/video-state
     restart: unless-stopped
   sd-server:
     entrypoint: [/gpu-guard, /gpu-lock/gpu-mode.lock]
     volumes:
       - ./video-mcp/gpu-guard:/gpu-guard:ro
-      - /home/linxuhao/.local/state/vip-gpu:/gpu-lock
+      - ${GPU_LOCK_DIR:-/home/linxuhao/.local/state/vip-gpu}:/gpu-lock
   audiocpp-server:
     entrypoint: [/gpu-guard, /gpu-lock/gpu-mode.lock]
     volumes:
       - ./video-mcp/gpu-guard:/gpu-guard:ro
-      - /home/linxuhao/.local/state/vip-gpu:/gpu-lock
+      - ${GPU_LOCK_DIR:-/home/linxuhao/.local/state/vip-gpu}:/gpu-lock
   llamacpp-qwen:
     entrypoint: [/gpu-guard, /gpu-lock/gpu-mode.lock, /app/llama-server]
     volumes:
       - ./video-mcp/gpu-guard:/gpu-guard:ro
-      - /home/linxuhao/.local/state/vip-gpu:/gpu-lock
+      - ${GPU_LOCK_DIR:-/home/linxuhao/.local/state/vip-gpu}:/gpu-lock
   vllm-qwen:
     entrypoint: [/gpu-guard, /gpu-lock/gpu-mode.lock]
     volumes:
       - ./video-mcp/gpu-guard:/gpu-guard:ro
-      - /home/linxuhao/.local/state/vip-gpu:/gpu-lock
+      - ${GPU_LOCK_DIR:-/home/linxuhao/.local/state/vip-gpu}:/gpu-lock
   qwen3-asr:
     entrypoint: [/gpu-guard, /gpu-lock/gpu-mode.lock]
     volumes:
       - ./video-mcp/gpu-guard:/gpu-guard:ro
-      - /home/linxuhao/.local/state/vip-gpu:/gpu-lock
+      - ${GPU_LOCK_DIR:-/home/linxuhao/.local/state/vip-gpu}:/gpu-lock
 
   continuity:
     networks:
@@ -52,15 +52,15 @@ services:
       ENGINE_WAIT_S: 930
       JOB_TIMEOUT_S: 930
     volumes:
-      - /home/linxuhao/vip-gateway/continuity-state:/state
-      - /home/linxuhao/vip-gateway/continuity-cache:/cache
+      - ${GATEWAY_ROOT:-/home/linxuhao/vip-gateway}/continuity-state:/state
+      - ${GATEWAY_ROOT:-/home/linxuhao/vip-gateway}/continuity-cache:/cache
   media-gen:
     environment:
       JOB_TIMEOUT_S: 930
       VULKAN_DEVICE: 0
     volumes:
-      - /home/linxuhao/vip-gateway/continuity-state:/state:ro
-      - /home/linxuhao/vip-gateway/continuity-state/_shell_tmp:/shell_tmp
+      - ${GATEWAY_ROOT:-/home/linxuhao/vip-gateway}/continuity-state:/state:ro
+      - ${GATEWAY_ROOT:-/home/linxuhao/vip-gateway}/continuity-state/_shell_tmp:/shell_tmp
 
 networks:
   video-control: {}
