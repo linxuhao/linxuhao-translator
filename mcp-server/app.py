@@ -34,6 +34,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from fastmcp import FastMCP
+from gpu_client import GPU_URL, gpu_headers
 from PIL import Image
 from cachetools import LRUCache
 import pdfplumber
@@ -42,10 +43,6 @@ from bs4 import BeautifulSoup
 # ==========================================
 # 配置
 # ==========================================
-VLLM_URL = os.getenv("VLLM_URL", "http://vllm_qwen:8000/v1/chat/completions")
-ASR_URL = os.getenv("ASR_URL", "http://qwen3_asr:8000/v1/chat/completions")
-ASR_MODEL = os.getenv("ASR_MODEL_NAME", "qwen3-asr")
-HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 # 公网门禁: 设了这个 token 后, 凡带 Cf-Ray 头的请求 (即经 Cloudflare 隧道进来的)
 # 都要带匹配的 X-AItelier-MCP-External-Token 头才能用 —— 覆盖 MCP 工具和 /upload/*
@@ -260,29 +257,12 @@ def is_file_url(url: str) -> bool:
 
 
 async def call_asr(content: list) -> str:
-    payload = {
-        "model": ASR_MODEL,
-        "messages": [{"role": "system", "content": "<<DISABLE_THINKING>>"}, {"role": "user", "content": content}],
-        "max_tokens": 512,
-        "temperature": 0.0
-    }
-    headers = {}
-    if HF_TOKEN:
-        headers["Authorization"] = f"Bearer {HF_TOKEN}"
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.post(ASR_URL, json=payload, headers=headers)
-        resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
-
-    # Qwen3-ASR 的原生输出带一层信封: "language Chinese<asr_text>正文"。
-    # 走 /v1/audio/transcriptions 时 vLLM 会自己剥 (qwen3_asr.py:post_process_output),
-    # 但我们走的是 chat/completions —— 那条路径原样透传, 所以得自己剥。
-    # gateway 的 translation.py / record.py / tutor.py 三个调用方都剥了, 只有这里漏了,
-    # 于是 transcribe_audio 一直把 "language Chinese<asr_text>您好…" 整条返给调用方。
-    match = re.match(r"^\s*language\s+([A-Za-z]+)\s*<asr_text>\s*(.*)",
-                     raw, re.IGNORECASE | re.DOTALL)
-    return match.group(2).strip() if match else raw
+    from gpu_client import transcribe
+    url=content[0]['audio_url']['url']
+    if not url.startswith('data:audio/wav;base64,'):raise ValueError('Expected normalized WAV audio')
+    wav=base64.b64decode(url.split(',',1)[1],validate=True)
+    async with httpx.AsyncClient(timeout=930) as client:
+        return (await transcribe(client,wav))['text'].strip()
 
 
 async def call_vllm(content: list, max_tokens: int = 2048, timeout: float = TIMEOUT) -> str:
@@ -292,12 +272,8 @@ async def call_vllm(content: list, max_tokens: int = 2048, timeout: float = TIME
         "max_tokens": max_tokens,
         "temperature": 0.1
     }
-    headers = {}
-    if HF_TOKEN:
-        headers["Authorization"] = f"Bearer {HF_TOKEN}"
-
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(VLLM_URL, json=payload, headers=headers)
+        resp = await client.post(GPU_URL+'/engines/translator/v1/chat/completions', json=payload, headers=gpu_headers(), timeout=max(timeout,930))
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
 
@@ -1473,6 +1449,20 @@ class _TokenGate:
                     return
         await self.app(scope, receive, send)
 
+
+import video_tools
+mcp.mount(video_tools.mcp)
+
+@mcp.custom_route('/video/files/{path:path}', methods=['GET'])
+async def video_download(request: Request):
+    from starlette.responses import StreamingResponse
+    client=httpx.AsyncClient(timeout=930)
+    upstream=await client.send(client.build_request('GET',GPU_URL+'/files/'+request.path_params['path'],headers=gpu_headers()),stream=True)
+    async def content():
+        try:
+            async for chunk in upstream.aiter_bytes():yield chunk
+        finally:await upstream.aclose();await client.aclose()
+    return StreamingResponse(content(),status_code=upstream.status_code,headers={'content-type':upstream.headers.get('content-type','application/octet-stream')})
 
 if __name__ == "__main__":
     import uvicorn
