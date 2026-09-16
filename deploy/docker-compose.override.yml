@@ -3,7 +3,9 @@ services:
     build: /home/linxuhao/vip-gateway-unified/mcp-server
     environment:
       GPU_SERVICE_URL: http://linxuhao-ai:9041
-      VIDEO_PUBLIC_URL: https://agentmcp.linxuhao.app
+      # Base for download URLs handed to callers. The shared module appends /files/, and
+      # mcp-server serves those at /video/files/, so the /video belongs here.
+      VIDEO_PUBLIC_URL: https://agentmcp.linxuhao.app/video
     volumes:
       - /home/linxuhao/.local/state/vip-gpu/GPU_API_TOKEN:/run/secrets/GPU_API_TOKEN:ro
   gateway:
