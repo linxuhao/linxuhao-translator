@@ -1,364 +1,41 @@
+# 随身翻译官 — the translator product only.
+#
+# Since 2026-09-16 this repository holds just the gateway. Everything else that used to be
+# in this file has its own repository and its own compose project:
+#
+#   cloudflare tunnel        ~/cloudflare-tunnel on the front host
+#   MCP layer (mcp_server)   https://github.com/linxuhao/agentmcp
+#   GPU layer (engines, video runtime, media shell, continuity)
+#                            https://github.com/linxuhao/gpu-runtime
+#
+# The gateway has no GPU. ASR and the LLM are reached over HTTP on the GPU layer's facade
+# (GPU_SERVICE_URL) with a bearer token mounted from a file.
+#
+#   docker compose up -d --build
 services:
-  # The Cloudflare tunnel is NOT here any more (2026-09-16): it runs as its own compose
-  # project, ~/cloudflare-tunnel on the front host, so that nothing done to this stack can
-  # take the public path down. Services become public by joining the `default` network
-  # below, which is the tunnel's rendezvous network.
-
-  # ----------------------------------------
-  # 调度中枢: API Gateway & PWA
-  # ----------------------------------------
   gateway:
     build:
       context: ./gateway
     container_name: api_gateway
-    profiles: ["gateway"]
     ports:
       - "5000:5000"
     volumes:
       - ./gateway/app:/app
+      # The GPU layer's bearer token, as a file (never an env var).
+      - ${GPU_LOCK_DIR:-/home/linxuhao/.local/state/vip-gpu}/GPU_API_TOKEN:/run/secrets/GPU_API_TOKEN:ro
     environment:
-      - BRAIN_ENGINE_URL=${BRAIN_ENGINE_URL:-}
-      - ASR_ENGINE_URL=${ASR_ENGINE_URL:-}
-      - ASR_TRANSCRIBE_URL=${ASR_TRANSCRIBE_URL:-}
+      GPU_SERVICE_URL: http://${GPU_HOST:-linxuhao-ai}:9041
     # 容器内不走 Tailscale MagicDNS, 所以显式映射 AI 机。
     extra_hosts:
-      - "linxuhao-ai:${LINXUHAO_AI_IP}"
-    restart: unless-stopped
-
-  # ==========================================
-  # GPU 0 (7900 XTX): vLLM 推理引擎 (2026 SOTA 架构)
-  # ==========================================
-  # ==========================================
-  # GPU 0 (7900 XTX): llama.cpp + Vulkan (取代 vLLM/ROCm)
-  # 实测同卡同模型: decode 35k 上 1.7 -> 70 tok/s, 窗口 49k -> 131k
-  # ==========================================
-  llamacpp-qwen:
-    image: ghcr.io/ggml-org/llama.cpp:server-vulkan
-    container_name: llamacpp_qwen
-    profiles: ["translator"]
-    ports:
-      - "8000:8080"
-    devices:
-      - "/dev/dri:/dev/dri"
-    group_add:
-      - "44"   # video
-      - "992"   # render  (名字在容器内不存在, 必须用数字 GID)
-    environment:
-      - GGML_VK_VISIBLE_DEVICES=0
-    volumes:
-      - ~/.cache/huggingface/hub:/models/hub
-    entrypoint: ["/app/llama-server"]
-    command: >
-      -m /models/hub/models--unsloth--Qwen3.8-27B-GGUF/snapshots/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_M.gguf
-      --mmproj /models/hub/models--unsloth--Qwen3.8-27B-GGUF/snapshots/4ca720788d1e01f1bff70c033e0d0028fd02e502/mmproj-F16.gguf
-      -md /models/hub/models--unsloth--Qwen3.8-27B-GGUF/snapshots/4ca720788d1e01f1bff70c033e0d0028fd02e502/MTP/mtp-Qwen3.8-27B-Q4_0.gguf
-      -ngld 99 --spec-draft-n-max 3
-      -ngl 99 -c 131072
-      --cache-type-k q8_0 --cache-type-v q8_0 -fa on
-      --alias qwen3 --host 0.0.0.0 --port 8080 -np 1 --no-mmap
-    restart: unless-stopped
-
-  vllm-qwen:
-    profiles: ["legacy"]   # 回退用: docker compose --profile legacy up -d vllm-qwen
-    image: vllm/vllm-openai-rocm:latest #for support of --reasoning-config, it gets dropped on latest nightly
-    container_name: vllm_qwen
-    ports:
-      - "8000:8000"
-    devices:
-      - "/dev/kfd:/dev/kfd"
-      - "/dev/dri:/dev/dri"
-    group_add:
-      - video
-      - render
-    environment:
-      - HIP_VISIBLE_DEVICES=0
-      - VLLM_USE_TRITON_AWQ=1
-      - FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-      - VLLM_SLEEP_WHEN_IDLE=1
-    volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
-      - ./qwen3.5/thinking.jinja:/app/thinking.jinja
-    entrypoint: []
-    # 【关键修复 2】：手动指定 bash 执行环境
-    command: >
-      vllm serve sokada4/Qwen3.8-27B-GPTQ-Int4
-      --dtype float16
-      --max-model-len 70400
-      --kv-cache-dtype fp8
-      --enable-prefix-caching
-      --mamba-ssm-cache-dtype float16
-      --mamba-block-size 128
-      --gpu-memory-utilization 0.97
-      --max-num-seqs 2
-      --chat-template /app/thinking.jinja
-      --served-model-name qwen3
-      --trust-remote-code
-    restart: unless-stopped
-
- # ==========================================
-  # 文件名: docker-compose.audio.yml
-  # 架构定位: GPU 1 (7800 XT) - 纯正 ROCm 原生听觉与发声节点
-  # ==========================================
-  qwen3-asr:
-    build:
-        context: ./qwen3-asr
-    container_name: qwen3_asr
-    profiles: ["translator"]
-    ports:
-      - "9000:8000"
-    devices:
-      - "/dev/kfd:/dev/kfd"
-      - "/dev/dri:/dev/dri"
-    group_add:
-      - video
-      - render
-    environment:
-      - HIP_VISIBLE_DEVICES=1
-      - VLLM_USE_TRITON_AWQ=1
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-      - VLLM_SLEEP_WHEN_IDLE=1
-    volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
-    entrypoint: []
-    # 【关键修复 2】：手动指定 bash 执行环境
-    command: >
-      vllm serve Qwen/Qwen3-ASR-1.7B
-      --dtype float16
-      --max-model-len 4096
-      --gpu-memory-utilization 0.45
-      --max-num-seqs 32
-      --served-model-name qwen3-asr
-      --trust-remote-code
-    restart: unless-stopped
-
-  # ==========================================
-  # MCP Server - ASR/OCR 工具 (Tailscale 私有网络)
-  # ==========================================
-  mcp-server:
-    build:
-      context: ./mcp-server
-    container_name: mcp_server
-    profiles: ["gateway"]
-    ports:
-      - "9003:9003"
-    environment:
-      # 默认一律写跨机形式。mcp-server 跑在 linxuhaserver 上而推理都在 linxuhao-ai,
-      # 用容器内主机名 (qwen3_asr / media_gen) 只在同机时成立 —— 实测跨机 curl 返回 000。
-      # 跨机形式两台机都通 (AI 机上它指向自己的 Tailscale 地址, 正好是发布出来的端口),
-      # 所以不需要任何 override 文件。
-      - ASR_URL=${ASR_URL:-}
-      - VLLM_URL=${VLLM_URL:-}
-      - SEARXNG_URL=${SEARXNG_URL:-}
-      - MEDIA_GEN_URL=${MEDIA_GEN_URL:-}
-      # 工具返回给调用方的下载 URL 前缀, 必须是调用方能解析的地址
-      - MEDIA_GEN_PUBLIC_URL=${MEDIA_GEN_PUBLIC_URL:-}
-      # 公网门禁: 经 Cloudflare 隧道 (agentmcp.linxuhao.app) 进来时要求的 token。
-      - AITELIER_MCP_EXTERNAL_TOKEN=${AITELIER_MCP_EXTERNAL_TOKEN:-}
-      # Host 白名单: 经隧道暴露时的公网 hostname (逗号分隔扩展)。
-      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
-    # 容器内不走 Tailscale MagicDNS, 所以显式映射 AI 机。
-    extra_hosts:
-      - "linxuhao-ai:${LINXUHAO_AI_IP}"
-    restart: unless-stopped
-
-  # ==========================================
-  # GPU 1 (7800 XT): 媒体生成 (文生图 FLUX.2 Klein + 文生音乐 Stable Audio 3 Small) — 后端 ggml/Vulkan
-  # ==========================================
-  media-gen:
-    build:
-      context: ./media-gen
-    container_name: media_gen
-    networks:
-      - default
-      - engines
-    profiles: ["media"]
-    ports:
-      - "9010:9010"
-    # 没有 devices / group_add: 壳一行 GPU 代码都不跑, 生图配音全在 continuity 那边。
-    environment:
-      - CONTINUITY_MCP_URL=http://continuity_mcp:9030/mcp
-      # /health 回报的 device 字段; 壳自己不碰显卡, 这个值只是转述本机怎么配的
-      - VULKAN_DEVICE=1     # 1 = RX 7800 XT (RADV NAVI32); 0 = 7900 XTX, 被 vllm 占用
-      # ⚠️ 【限值耦合】下面四个上限 continuity 那边也有一份 (见本文件 continuity 段 +
-      # 它的 config.py)。壳必须知道它们, 因为 `clamped` 是 POST /v1/jobs 同步返回的 ——
-      # 那一刻任务还没跑, 拿不到 continuity 的结果, 只能自己按请求算。
-      # 两边不一致 = 算出来的 clamped 是错的, 而且没有任何一层会报错。改一边必须改另一边。
-      - MAX_IMAGE_SIZE=1024
-      - MAX_AUDIO_SECONDS=120
-      - MAX_SPEECH_CHARS=200
-      - MAX_SAMPLE_CHARS=45
-    volumes:
-      - ./media-gen/app.py:/app/app.py
-      # continuity 的状态目录, 只读 —— 三条下载路径 (/files/, /v1/actors/{n}/audio,
-      # /v1/subjects/{n}/image) 直接从这里发文件。写入一律走 MCP, 所以是 :ro。
-      - ./continuity-state:/state:ro
-      # 三处 base64 入参在 MCP 那边是"本机路径"参数, 得落到两个容器都看得见的地方。
-      # 同一个宿主机目录在 continuity 那边是 /state/_shell_tmp (它的 /state 是可写的),
-      # 这样不用去动 continuity 那一段的挂载。
-      - ./continuity-state/_shell_tmp:/shell_tmp
-    depends_on:
-      - continuity
-    restart: unless-stopped
-
-  # ==========================================
-  # GPU 1: ggml/Vulkan 推理引擎 (常驻, 模型不重载)
-  # ROCm 在这张卡上 VAE 解码静默算错且非确定 —— 见 ROCm/ROCm#6633。
-  # Vulkan/RADV 走运行时编译的 SPIR-V, 不查 per-gfx 预编译 kernel 表, 结果正确且更快。
-  #
-  # 二进制在镜像里 (engines/Dockerfile 从钉死的 ref 在镜像内 clone + 编译), 仓库外
-  # 只剩权重。在这之前二进制是宿主机手工编的、由这里挂进来 —— 那让
-  # "新机器上 docker compose up -d" 是假的: 挂载点在新机器上根本不存在。
-  # 权重 22 GB 进不了 git, 所以仍然挂宿主机, 路径见 .env.example 的两个 *_WEIGHTS_DIR。
-  # ==========================================
-  sd-server:
-    build:
-      context: ./engines
-    container_name: sd_server
-    # 两个引擎是同一个 build context 编出来的同一份二进制, 所以显式共用一个镜像名。
-    # 不写 image: 时 compose 按服务名各生成一个 (vip-gateway-sd-server /
-    # -audiocpp-server), 于是 `build sd-server` 之后 audiocpp_server 仍在跑旧二进制
-    # —— 编译成功、部署成功、一半没更新, 全程零报错。2026-08-29 升 audio.cpp v0.7.0
-    # 时就是这么被骗过去一轮的: 镜像重建完, 容器里的二进制还是 8 天前那个。
-    # 上游 (dsh-continuity 的 deploy/docker-compose.yml) 一直是共用一个镜像名的,
-    # 是本文件手写时漏了。
-    image: vip-gateway-engines:latest
-    networks:
-      # engines ONLY. `default` was dead here — nothing on the shared network
-      # references these two; their only in-file consumer is continuity, which
-      # lives on `engines`, and media-gen (the intended door) talks solely to
-      # continuity_mcp:9030. Keeping `default` cost exactly what moving
-      # continuity was meant to buy: a neighbour project on cloudflare_edge
-      # could resolve sd_server / audiocpp_server by name and drive an
-      # unauthenticated GPU engine. Host ports are unchanged.
-      - engines
-    profiles: ["media"]
-    ports:
-      - "9020:9020"
-    devices:
-      - "/dev/dri:/dev/dri"
-    group_add:
-      - "44"
-      - "992"
-    volumes:
-      - ${SD_WEIGHTS_DIR:-/home/linxuhao/audiocpp/sdmodels2}:/models/sd:ro
-    command: >
-      sd-server
-      --diffusion-model /models/sd/flux-2-klein-4b-Q8_0.gguf
-      --vae /models/sd/flux2-vae.safetensors
-      --llm /models/sd/qwen_3_4b.safetensors
-      --vae-format flux2 --backend vulkan1
-      --diffusion-fa --offload-to-cpu --cfg-scale 1.0 --steps 4
-      --listen-ip 0.0.0.0 --listen-port 9020
-    restart: unless-stopped
-
-  audiocpp-server:
-    build:
-      context: ./engines
-    container_name: audiocpp_server
-    image: vip-gateway-engines:latest   # 同上, 与 sd-server 共用
-    networks:
-      # engines ONLY. `default` was dead here — nothing on the shared network
-      # references these two; their only in-file consumer is continuity, which
-      # lives on `engines`, and media-gen (the intended door) talks solely to
-      # continuity_mcp:9030. Keeping `default` cost exactly what moving
-      # continuity was meant to buy: a neighbour project on cloudflare_edge
-      # could resolve sd_server / audiocpp_server by name and drive an
-      # unauthenticated GPU engine. Host ports are unchanged.
-      - engines
-    profiles: ["media"]
-    ports:
-      - "9021:9021"
-    devices:
-      - "/dev/dri:/dev/dri"
-    group_add:
-      - "44"
-      - "992"
-    volumes:
-      - ${AUDIO_WEIGHTS_DIR:-/home/linxuhao/audiocpp/models}:/models/audio:ro
-      # 这份配置和上游 deploy/audio_server.json.tmpl 逐字等价 (它的 __DEVICE__ = 1),
-      # 所以镜像换成自带二进制之后照用, 不需要改。四个模型路径都是 /models/audio/*。
-      - ./media-gen/audio_server.json:/conf/audio_server.json:ro
-      # 曾经挂过 ./actors:/actors:ro —— 那时克隆走 /v1/tasks/run, 参考音的路径由引擎
-      # 自己解析, 所以两边必须看见同一个目录。现在走 /v1/audio/speech 传 base64,
-      # 引擎不再碰文件系统, 这也是跨机克隆能成立的原因。
-    command: >
-      audiocpp_server
-      --config /conf/audio_server.json --no-ui
-    restart: unless-stopped
-
-  # ==========================================
-  # continuity MCP server (streamable-http, 纯 CPU)
-  #
-  # 迁移第一步: 先把 continuity 立成一个常驻服务, 之后 media-gen 改成薄壳走它。
-  # 本服务不碰显卡 —— 生图/配音都是 HTTP 打给下面那两个引擎, 和 media-gen 打的是
-  # 同一对端口, 引擎自己排队。
-  #
-  # 【不发布端口】这个服务没有任何鉴权, 而它的工具能往磁盘写文件、能删 actor/subject。
-  # 所以 ports: 一行都不能有 —— 只让同一个 compose 网络里的容器按容器名连它。
-  # CONTINUITY_HTTP_HOST 必须是 0.0.0.0: 默认的 127.0.0.1 在容器里意味着连同网络的
-  # 别的容器也连不上 (它只绑 loopback), 那样这个服务等于没起。
-  # 这两条不矛盾: 绑 0.0.0.0 是绑容器的网卡, 不发布端口宿主机上就看不到它。
-  # ==========================================
-  continuity:
-    build:
-      context: ./continuity
-    container_name: continuity_mcp
-    networks:
-      # engines ONLY, deliberately NOT the shared default network. This service
-      # has no authentication and its tools write files and delete actors /
-      # subjects — deleting one is unrecoverable, a recast is a different person.
-      # Its own comment below justifies publishing no ports on the grounds that
-      # "only containers in the same compose network can reach it by name"; once
-      # the default network became the SHARED tunnel network (cloudflare_edge),
-      # that premise stopped holding and AItelier / ActiveMemoryIndex could have
-      # reached it. "Reachable by the tunnel" and "reachable by any neighbour"
-      # must not be the same property.
-      - engines
-    profiles: ["media"]
-    # 以宿主机 uid/gid 跑, 否则 actors/subjects/generated 写出来属主是 root,
-    # 宿主机上要 sudo 才能动 —— 而这些是不可复现的资产, 迟早要手动备份。
-    user: "1000:1000"
-    # LOOPBACK ONLY. 这个服务没有鉴权, 而它能往磁盘写文件、能删 actor/subject
-    # (见 continuity 自己的 config.py: 它的默认就是只听 127.0.0.1)。发布到宿主
-    # 是为了让宿主进程 (dsh) 能连 —— 它不是容器, 到不了这条网桥。绑
-    # 0.0.0.0 等于把删名册的权力交给同网段任何人。
-    ports:
-      - "127.0.0.1:9030:9030"
-    environment:
-      - CONTINUITY_TRANSPORT=streamable-http
-      - CONTINUITY_HTTP_HOST=0.0.0.0
-      - CONTINUITY_HTTP_PORT=9030
-      - CONTINUITY_HTTP_PATH=/mcp
-      # 引擎在同机同网络, 用容器名。
-      - SD_SERVER=http://sd_server:9020
-      - AUDIO_SERVER=http://audiocpp_server:9021
-      - CONTINUITY_STATE_DIR=/state
-      # 参考音上限。continuity 的默认是 15s (为小显存机器调的), 而 media-gen 一直是 30s ——
-      # 不设这一行, 15~30 秒的参考音会从"能导入"变成 400, 是一次静默的行为回归。
-      - CONTINUITY_REF_MAX_S=30
-      - MAX_IMAGE_SIZE=1024
-      - ENGINE_WAIT_S=180        # 引擎冷启动要从磁盘重读十几 GB 权重
-      - AUDIO_IDLE_UNLOAD_S=120  # 空闲 120s 卸掉音频模型, 显卡回到零常驻
-      - RETENTION_DAYS=30        # generated/ 保留 30 天; actors/subjects 永不清理
-    volumes:
-      # actors/ (参考音) 和 subjects/ (定妆图) 不可复现 —— 重铸出来是另一个人/另一个箱子。
-      # 留在容器可写层里, 一次 docker compose up 重建就永久没了。必须落宿主机。
-      - ./continuity-state:/state
-      # rembg 模型缓存。不挂的话每次重建容器都要重新下 ~214 MB。
-      - ./continuity-cache:/cache
-    depends_on:
-      - sd-server
-      - audiocpp-server
+      - "linxuhao-ai:${LINXUHAO_AI_IP:-100.68.74.107}"
     restart: unless-stopped
 
 # ==========================================
 # [网络层] 默认网 = 隧道的会合网
 # ==========================================
 #
-# 本项目的默认网直接命名为会合网, 所以每个服务隐式就在上面, 不必逐个声明,
-# 而 AItelier / ActiveMemoryIndex 按同一个名字加入即可 —— 三个仓库同一种
-# 写法: 只给名字, 不写 external:。
+# 本项目的默认网直接命名为会合网, 所以 gateway 隐式就在上面, 隧道按容器名 api_gateway
+# 找到它 —— AItelier / ActiveMemoryIndex / agentmcp 都是同一种写法: 只给名字, 不写 external:。
 #
 # 为什么不写 external: true —— external 的网一旦缺失, compose 会在任何容器
 # 启动之前整个拒绝运行。那正是当初把网络挪进可选 `-f` 叠加文件的理由, 而那个
@@ -375,7 +52,3 @@ services:
 networks:
   default:
     name: ${CF_EDGE_NETWORK:-cloudflare_edge}
-  # The engine tier. Private to this project — no other project joins it, and it
-  # is where anything unauthenticated belongs now that `default` is the shared
-  # tunnel network. media-gen sits on both and is the only way in.
-  engines:

@@ -1,8 +1,8 @@
 # 🗣️ 随身翻译官 / ShuiShen-Translator
 
-A high-performance, self-hosted real-time **voice AI gateway**, built and tested on heterogeneous AMD ROCm multi-GPU hardware (with best-effort NVIDIA support; see [Hardware Support](#hardware-support)). It pairs the raw hearing of **Qwen3-ASR** with the linguistic reasoning of **Qwen3.6-27B**, all wrapped in a mobile-first, iOS-compatible web interface.
+A self-hosted real-time **voice AI gateway**: push-to-talk → ASR → LLM → streamed reply, wrapped in a mobile-first, iOS-compatible web interface. It pairs the raw hearing of **Qwen3-ASR** with the linguistic reasoning of a **Qwen3.8-27B** translator model, both served by a separate GPU layer.
 
-One self-hosted speech pipeline (push-to-talk → ASR → LLM → streamed reply), three product modes: a low-latency **Translator**, a voice-based **AI Tutor**, and a **Meeting Recorder**.
+Three product modes on one speech pipeline: a low-latency **Translator**, a voice-based **AI Tutor**, and a **Meeting Recorder**.
 
 ## ✨ Key Features
 
@@ -15,8 +15,6 @@ One self-hosted speech pipeline (push-to-talk → ASR → LLM → streamed reply
 * **LocalStorage Persistence**: Language preferences and per-mode history survive page refreshes. History can be exported to a `.txt` file or cleared with one click.
 
 ### Modes
-
-Built on one real-time speech pipeline (self-hosted Qwen3-ASR + Qwen3.6-27B on vLLM/ROCm, FastAPI, Docker):
 
 #### 1. Translator (default) — `routers/translation.py`
 Push-to-talk → ASR → translation → playback, with auto language ID, conversational history, and replay. Owner-centric routing: anything not spoken in your native language is translated *to* your native language; native speech is translated *to* your chosen target language. A "third language" detection bubble lets you promote an unexpected language to the new target.
@@ -36,178 +34,51 @@ Continuous-listening meeting notes: 3-way noise-robust parallel ASR followed by 
 
 ### Engineering & Architecture
 
-* **Heterogeneous Dual-GPU Engine**:
-  * **Ear Node (ASR)**: a `vLLM` engine running the `Qwen3-ASR-1.7B` model on a secondary GPU.
-  * **Brain Node (LLM)**: a `vLLM` engine running `Qwen3.6-27B` (4-bit GPTQ) on the flagship GPU, served under the model name `qwen3`.
 * **Stateless Gateway**: a lightweight FastAPI node (no GPU) handles routing, FFmpeg audio normalization, request queueing, and SSE streaming. Each mode runs its own pool of concurrent workers fed by a priority queue.
-* **Audio Pipeline**: in-memory FFmpeg normalization to pure `16kHz mono WAV` before the audio is handed to the GPU nodes.
-* **Cloudflare Tunnel + Access Ready**: a `cloudflared` tunnel exposes the gateway globally, and a built-in SQLite telemetry probe hooks into the `Cf-Access-Authenticated-User-Email` header for per-user usage tracking behind Cloudflare Zero Trust.
+* **Audio Pipeline**: in-memory FFmpeg normalization to pure `16kHz mono WAV` before the audio is handed to the GPU layer.
+* **GPU layer behind one HTTP facade**: ASR (`/engines/audio/v1/audio/transcriptions/details`, with a language hint) and the LLM (`/engines/translator/v1/chat/completions`) are served by [gpu-runtime](https://github.com/linxuhao/gpu-runtime), which owns the GPUs and schedules every engine. The gateway holds a bearer token, mounted from a file, and nothing else about the hardware.
+* **Cloudflare Tunnel + Access Ready**: a tunnel exposes the gateway globally, and a built-in SQLite telemetry probe hooks into the `Cf-Access-Authenticated-User-Email` header for per-user usage tracking behind Cloudflare Zero Trust.
 * **Admin & VIP Priority**: an `/admin` panel (admin-only, gated on the Cloudflare Access email) lists users and lets the owner grant **VIP** status; VIP/admin requests are served at a higher queue priority.
-* **Optional MCP Server**: a separate `mcp-server` exposes ASR / OCR (image + PDF) / web-search / web-fetch tools over the MCP JSON-RPC protocol for agent integrations.
 
-## 🏗️ Architecture Matrix
+## 🏗️ Architecture
 
 ```mermaid
 graph TD
     A[Mobile Web UI<br/>Translate / Tutor / Record] -->|WebM / MP4| B(FastAPI Gateway)
-    B -->|FFmpeg Wash -> 16kHz WAV| C[Qwen3-ASR Node]
-    C -->|Detected Lang & Text| B
-    B -->|Prompt + History| D[vLLM Qwen3.6-27B Node]
-    D -->|Streamed Tokens| B
+    B -->|FFmpeg Wash -> 16kHz WAV| C[gpu-runtime facade :9041]
+    C -->|/engines/audio| D[Qwen3-ASR]
+    C -->|/engines/translator| E[Qwen3.8-27B]
+    D -->|Detected Lang & Text| B
+    E -->|Streamed Tokens| B
     B -->|SSE: original + reply| A
-    A -->|State Machine| E[Browser TTS / Queue]
-    F[Cloudflare Tunnel + Access] --- B
+    A -->|State Machine| F[Browser TTS / Queue]
+    G[Cloudflare Tunnel + Access] --- B
 ```
+
+This repository is the gateway only. Until 2026-09-16 it also carried the engines, an MCP
+server and a media stack; those now live in their own repositories and compose projects:
+[agentmcp](https://github.com/linxuhao/agentmcp) (the MCP layer) and
+[gpu-runtime](https://github.com/linxuhao/gpu-runtime) (everything that touches a GPU).
 
 ## 🚀 Deployment
 
 ### Prerequisites
 
 * Docker & Docker Compose
-* A supported GPU — **AMD ROCm** (tested) or **NVIDIA** (best-effort, unverified). Apple/Intel are not functional yet; see [Hardware Support](#hardware-support).
-* (Optional) A Cloudflare Tunnel token for public access
-* (Optional) A Hugging Face token for gated models
+* A reachable gpu-runtime facade and its bearer token file
+* (Optional) A Cloudflare Tunnel for public access
 
-### Quick Start — Docker Compose
-
-The recommended install path. The repo ships a working `docker-compose.yml` tuned for a dual-AMD setup (7900 XTX + 7800 XT). Adjust the image/devices/model in it for your hardware, then:
+### Docker Compose
 
 ```bash
 git clone https://github.com/linxuhao/linxuhao-translator.git
 cd linxuhao-translator
-
-# Optionally configure your tokens in .env (CF_TUNNEL_TOKEN, HF_TOKEN)
-
-# Pick what THIS host runs. EVERY service is behind a profile, so a bare
-# `up -d` selects nothing and says so ("no service selected").
-#   gateway     cloudflare_tunnel + api_gateway + mcp_server   (the front; no GPU)
-#   translator  vllm_qwen + qwen3_asr
-#   media       media_gen + continuity + sd_server + audiocpp_server
-COMPOSE_PROFILES=gateway,translator,media docker compose up -d
+cp .env.example .env     # GPU_HOST / LINXUHAO_AI_IP / GPU_LOCK_DIR / CF_EDGE_NETWORK
+docker compose up -d --build
 ```
 
-Put `COMPOSE_PROFILES=…` in `.env` to stop repeating it. A host that only fronts
-the stack runs `gateway`; the GPU box runs `translator,media`.
-
-**The tunnel is in `gateway`, not always-on.** One machine terminates the
-tunnel. A profile-less cloudflared would also start on the GPU box, and a second
-connector on the same token is a second replica Cloudflare load-balances across
-— one whose network holds no `api_gateway` and no `mcp_server`, so a share of
-public requests would intermittently fail to reach an origin while both hosts
-looked healthy.
-
-> The first boot takes a while as it downloads the `Qwen3-ASR-1.7B` and `Qwen3.6-27B` models into `~/.cache/huggingface`.
-
-#### Media generation depends on a published package
-
-`media-gen` is a **thin shell** (~780 lines). It serves the same 16 HTTP endpoints it always
-has, but every generation, asset store, and VRAM decision is delegated over **MCP-over-HTTP**
-to the `continuity` service, which runs [`dsh-continuity`](https://pypi.org/project/dsh-continuity/)
-from PyPI:
-
-```
-mcp-server ──HTTP :9010──▶ media-gen (shell) ──MCP :9030──▶ continuity ──HTTP──▶ sd-server :9020
-                                     │                     (dsh-continuity)      audiocpp-server :9021
-                                     └── reads ./continuity-state (:ro) to serve /files/
-```
-
-Three consequences worth knowing before you deploy:
-
-* **The version is pinned on purpose.** `continuity/Dockerfile` installs an exact
-  `dsh-continuity==X.Y.Z`. The shell is written against that release's 21 MCP tools and their
-  `outputSchema`; a floating version would silently change this service's contract. To upgrade,
-  bump the `ARG` and `docker compose build continuity`.
-* **`continuity` does not own any weights.** It is pointed at this repo's own `sd-server` and
-  `audiocpp-server` (`SD_SERVER` / `AUDIO_SERVER`). The package ships its own installer
-  (`continuity-setup`) that would build engines and download ~18 GB — **do not run it here**;
-  this deployment is the bring-your-own-backend path.
-* **Port 9030 is deliberately not published.** The MCP server has no authentication and its
-  tools can write to disk and delete actors/subjects. It is reachable only from the compose
-  network.
-
-`docker compose up -d` handles the ordering — `media-gen` declares `depends_on: continuity`,
-and `continuity` declares `depends_on: [sd-server, audiocpp-server]`. Note that `depends_on`
-waits for *start*, not readiness; `continuity` retries a cold engine for `ENGINE_WAIT_S`
-(180 s by default), which covers `sd-server` re-reading 12.6 GB of weights from disk.
-
-Durable assets (cloned voice references, pinned character sheets) live in
-`./continuity-state/` on the host — **they are not reproducible, so back them up.**
-
-#### Bringing the two engines up on a new machine
-
-The engines are **built inside the image**. `engines/Dockerfile` is a vendored copy of
-`dsh-continuity`'s `src/continuity_mcp/deploy/Dockerfile`; it clones and compiles
-`stable-diffusion.cpp` and `audio.cpp` at pinned refs (`SDCPP_REF=97d2990`,
-`AUDIOCPP_REF=aec444c`) in a build stage and copies just the binaries plus
-`model_specs/` into a Vulkan-runtime stage. Nothing outside this repo is needed to get
-the binaries. The first build compiles two C++ projects and takes a while; after that it
-is layer-cached. (It used to be the opposite: the binaries were compiled by hand on the
-host and bind-mounted in, which made `docker compose up -d` a lie on any machine but the
-one they were built on.)
-
-The **weights are not** in the image — ~25 GB, they stay on the host and are mounted
-`:ro`. That is the one remaining manual step:
-
-```bash
-pip install -U huggingface_hub
-
-# Downloads the 7 files into the layout compose expects. Already-present files are
-# skipped, so it is safe to re-run as a verification pass.
-# Override SD_WEIGHTS_DIR / AUDIO_WEIGHTS_DIR to put them elsewhere (see .env.example).
-python3 - <<'PY'
-from huggingface_hub import hf_hub_download
-from pathlib import Path
-import os
-SD    = Path(os.environ.get("SD_WEIGHTS_DIR",    Path.home() / "audiocpp/sdmodels2"))
-AUDIO = Path(os.environ.get("AUDIO_WEIGHTS_DIR", Path.home() / "audiocpp/models"))
-Q = "Qwen3-TTS-12Hz-1.7B"
-WANT = [
-    (SD, "leejet/FLUX.2-klein-4B-GGUF", "flux-2-klein-4b-Q8_0.gguf", "flux-2-klein-4b-Q8_0.gguf"),
-    (SD, "Comfy-Org/flux2-klein-4B", "split_files/vae/flux2-vae.safetensors", "flux2-vae.safetensors"),
-    (SD, "Comfy-Org/flux2-klein-4B", "split_files/text_encoders/qwen_3_4b.safetensors", "qwen_3_4b.safetensors"),
-    (AUDIO, "audio-cpp/audio.cpp-gguf",
-     "Stable-Audio-3-Small-Music-GGUF/stable-audio-3-small-music-f16.gguf",
-     "stable-audio-3-small-music-f16.gguf"),
-    (AUDIO, "audio-cpp/audio.cpp-gguf",
-     f"{Q}-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf",
-     f"{Q}-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf"),
-    (AUDIO, "audio-cpp/audio.cpp-gguf",
-     f"{Q}-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
-     f"{Q}-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf"),
-    (AUDIO, "audio-cpp/audio.cpp-gguf",
-     "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
-     "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf"),
-]
-for root, repo, remote, dest in WANT:
-    d = root / dest
-    if d.exists():
-        print(f"已有 {d} ({d.stat().st_size / 2**30:.2f} GiB)"); continue
-    d.parent.mkdir(parents=True, exist_ok=True)
-    p = hf_hub_download(repo_id=repo, filename=remote, local_dir=str(root / "_hf"))
-    Path(p).replace(d); print(f"下好 {d}")
-PY
-
-docker compose up -d sd-server audiocpp-server continuity media-gen
-```
-
-Two values are wired for **this** box and need changing on a single-GPU machine — GPU 0
-here is the 7900 XTX held by vLLM, so the engines are pinned to GPU **1**:
-
-| where | value | meaning |
-|---|---|---|
-| `docker-compose.yml`, `sd-server` `command` | `--backend vulkan1` | Vulkan device index |
-| `media-gen/audio_server.json` | `"device": 1` | same, for the audio engine |
-
-The image model is **`flux-2-klein-4b-Q8_0.gguf`**, named literally in the `sd-server`
-`command`. Upstream's `models.json` defaults to `Q4_0` instead — same VRAM peak, 1.7 GB
-less disk. If you switch, change the filename in both places or the engine won't start.
-
-> `dsh-continuity` also ships `continuity-setup`, which would build engines and fetch
-> weights for you — **do not run it here.** It builds its own images, starts its own
-> containers (`continuity_sd` / `continuity_audio`) and wants a different weights layout
-> (`<dir>/sd`, `<dir>/audio`). This deployment brings its own backend.
-
-> On non-AMD hardware you'll need to adapt the image/devices to your GPU — see [Hardware Support](#hardware-support). An experimental auto-installer that generates this compose file for you is also documented there.
+The gateway joins the tunnel's rendezvous network by name (`CF_EDGE_NETWORK`), so it becomes
+public as soon as the tunnel's hostname points at `api_gateway:5000`.
 
 ### Access the UI
 
@@ -222,46 +93,18 @@ Navigate to <http://localhost:5000> (or your Cloudflare Tunnel domain).
 
 > iOS requires HTTPS or `localhost` to grant microphone permissions.
 
-## 🖥️ Hardware Support
+### Tests
 
-The installer ships GPU profiles for four vendors, but they are at very different maturity levels. Honest status:
-
-| Hardware | Status | Notes |
-|----------|--------|-------|
-| ✅ **AMD / ROCm** | Tested | The project is developed and runs in production on a dual-GPU AMD box. This is the supported path. |
-| 🟡 **NVIDIA** | Best-effort | A profile exists and is plausible, but has **not been verified on real NVIDIA hardware** yet. |
-| 🔴 **Apple (Metal/MPS)** | Not functional yet | Profile present, but the `vllm/vllm-openai` image has **no Metal/MPS backend**, so vLLM can't serve the models on Apple Silicon. |
-| 🔴 **Intel (XPU)** | Not functional yet | Profile present, but the `vllm/vllm-openai` image has **no XPU backend**, so vLLM can't serve the models on Intel GPUs. |
-
-If you're on AMD, follow the [Quick Start](#quick-start--docker-compose) as-is. On NVIDIA expect to do some debugging. Apple and Intel are wired into the installer for the future but won't serve models with the current vLLM image.
-
-### Experimental: Hardware-Adaptive Installer (AMD-tested)
-
-`install.sh` is a convenience wrapper that auto-detects your GPU vendor and VRAM, picks a profile from `config/hardware_profiles.yml` (single- or dual-GPU), generates a matching `docker-compose.yml`, and deploys. It is **experimental and only validated on AMD/ROCm** — NVIDIA is best-effort and Apple/Intel are non-functional, exactly as in the table above. It is **not** the recommended general path; prefer the [Quick Start](#quick-start--docker-compose) and adapt the compose file by hand.
-
-```bash
-git clone https://github.com/linxuhao/linxuhao-translator.git
-cd linxuhao-translator
-
-./install.sh                  # auto-detect, generate config, deploy
-./install.sh --list-profiles  # show all available hardware profiles
-./install.sh --profile amd_single_24gb   # force a specific profile
-./install.sh --dry-run        # detection only, no changes
-```
-
-One-line bootstrap (clone + install):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/linxuhao/linxuhao-translator/main/bootstrap.sh | bash
-```
+`tests/asr_contract.py` pins the request the gateway sends to the ASR engine (multipart WAV
+with concrete RIFF sizes, model name, language hint) against a mock transport.
 
 ## 🛣️ Roadmap
 
 - [x] Phase 1: Core translation loop & LLM routing.
-- [x] Phase 2: Hardware acceleration (vLLM for ASR + LLM) & iOS audio compatibility.
+- [x] Phase 2: Hardware acceleration & iOS audio compatibility.
 - [x] Phase 3: Persistent TTS history queue and UI metrics.
 - [x] Phase 4: Multi-mode expansion — AI Tutor ("Marine") + Meeting Recorder on the shared pipeline.
-- [x] Phase 5: Hardware-adaptive installer (AMD tested; NVIDIA best-effort; Apple/Intel profiles present but not yet functional — see [Hardware Support](#hardware-support)).
+- [x] Phase 5: Engines moved behind the gpu-runtime facade; the gateway is hardware-agnostic.
 - [ ] Phase 6 (Next): WebRTC Voice Activity Detection (VAD) chunking + true real-time streaming translation.
 
 ## 📜 License
