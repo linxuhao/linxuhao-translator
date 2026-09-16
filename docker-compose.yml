@@ -1,24 +1,8 @@
 services:
-  # ==========================================
-  # [网络层] Cloudflare 穿透隧道 (全球极速访问)
-  # ==========================================
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflare_tunnel
-    # gateway, NOT profile-less. Profile-less looked safer ("the tunnel can
-    # never be forgotten"), but this file serves TWO machines: the GPU box is
-    # told to run `translator,media`, and a profile-less cloudflared starts
-    # there too — a SECOND replica of the same tunnel token, which Cloudflare
-    # load-balances across. That replica's network has no api_gateway and no
-    # mcp_server, so a share of public requests hit an origin that cannot be
-    # resolved, intermittently, with both hosts looking healthy. Put
-    # COMPOSE_PROFILES in .env on the front host and a bare `up -d` still
-    # brings the tunnel up.
-    profiles: ["gateway"]
-    restart: unless-stopped
-    command: tunnel run
-    environment:
-      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
+  # The Cloudflare tunnel is NOT here any more (2026-09-16): it runs as its own compose
+  # project, ~/cloudflare-tunnel on the front host, so that nothing done to this stack can
+  # take the public path down. Services become public by joining the `default` network
+  # below, which is the tunnel's rendezvous network.
 
   # ----------------------------------------
   # 调度中枢: API Gateway & PWA
