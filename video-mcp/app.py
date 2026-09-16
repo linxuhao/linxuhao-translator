@@ -12,6 +12,9 @@ from starlette.responses import FileResponse, JSONResponse
 STATE=Path(os.getenv('VIDEO_STATE','/state'))
 PUBLIC=os.getenv('VIDEO_PUBLIC_URL','http://127.0.0.1:9041').rstrip('/')
 HOST_STATE=os.getenv('VIDEO_HOST_STATE','/home/linxuhao/h3-conditioning-bridge/video-state')
+# Set only where this runs apart from the backend — then every call is an authenticated POST
+# to the GPU-side instance instead of a unix socket. Unset beside the backend, as today.
+GPU_RPC=os.getenv('VIDEO_GPU_RPC','').rstrip('/')
 mcp=FastMCP('VideoMCP',instructions='Use the video_generation_workflow MCP prompt for the complete production workflow, suitable for any capable agent. Read the video_prompting_h3 MCP prompt before writing shot prompts: identity anchoring across cuts, playable action, audio description and interface limits. Both prompts hold only technique that is true across productions; a given film\'s style, rejections and thresholds belong to that project\'s own record, never to the shared prompts. The calling agent directs the film. Prefer its built-in advanced image generation tools, such as Codex imagegen; use AgentMCP image generation only when no such built-in capability is available. Reuse approved character assets independently of generator choice, then import approved keyframes here. Create projects and versioned shots, render standard (20 steps) or turbo (FL2VA 8 steps, Ref2VA preview 4 steps) asynchronously. Present candidate clips to the user; select only their chosen takes, then assemble an explicitly ordered shot list. V2 supports T2V, first/last frames, or 1..4 ordered reference images; preview 608x352 or native 1344x768, up to 124 frames. Ref2VA 768p uses standard only. Do not mix reference images with first/last frames. I2V conditioning parity is experimental. GPU models are automatically scheduled. GPU0 handles auxiliary engines and the H3 encoder; GPU1 retains H3. Queued auxiliary work precedes the next video. No lip-sync or reference-video/audio support.')
 
 @mcp.prompt
@@ -34,9 +37,18 @@ async def video_prompting_h3()->str:
     return (Path(__file__).parent/'prompts/h3_prompting.md').read_text()
 
 async def call(action,**arguments):
-    transport=httpx.AsyncHTTPTransport(uds=str(STATE/'runtime.sock'))
-    async with httpx.AsyncClient(transport=transport,timeout=930) as client:
-        response=await client.post('http://video/rpc',json={'action':action,'arguments':arguments})
+    payload={'action':action,'arguments':arguments}
+    if GPU_RPC:
+        # Off the GPU machine. The instance that sits beside the backend keeps serving /rpc,
+        # /engines and /files over the unix socket; this one only speaks to it, and the reply
+        # envelope is the same either way. Nothing on the GPU side changes.
+        token=Path(os.getenv('GPU_TOKEN_FILE','/run/secrets/gpu-api.token')).read_text().strip()
+        async with httpx.AsyncClient(timeout=930) as client:
+            response=await client.post(GPU_RPC,json=payload,headers={'Authorization':'Bearer '+token})
+    else:
+        transport=httpx.AsyncHTTPTransport(uds=str(STATE/'runtime.sock'))
+        async with httpx.AsyncClient(transport=transport,timeout=930) as client:
+            response=await client.post('http://video/rpc',json=payload)
     value=response.json()
     if response.status_code!=200:raise ValueError(value.get('error','backend request failed'))
     def decorate(obj):
