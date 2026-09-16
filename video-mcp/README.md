@@ -47,9 +47,9 @@ gcc -O2 -static video-mcp/gpu-guard.c -o video-mcp/gpu-guard
 mkdir -p /home/linxuhao/.local/state/vip-gpu
 touch /home/linxuhao/.local/state/vip-gpu/gpu-mode.lock
 chmod 600 /home/linxuhao/.local/state/vip-gpu/gpu-mode.lock
-# Install bridge/deploy/h3-video.service into ~/.config/systemd/user/ first.
-systemctl --user daemon-reload
-systemctl --user enable --now h3-video
+# The GPU runtime (formerly the h3-video user unit) runs as the gpu_runtime container
+# from the bridge checkout; it creates video-state/runtime.sock that video-mcp mounts.
+docker compose -f /home/linxuhao/h3-conditioning-bridge/deploy/docker-compose.yml up -d --build
 docker compose --profile video up -d --build video-mcp
 ```
 
