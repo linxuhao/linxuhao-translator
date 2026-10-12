@@ -21,7 +21,7 @@ async def transcribe(client,wav,language=None):
     wav=output.getvalue()
     data={'model':'qwen3-asr'}
     if language:data['language']=language
-    response=await client.post(GPU_URL+'/engines/audio/v1/audio/transcriptions/details',
+    response=await client.post(GPU_URL+'/engines/asr/v1/audio/transcriptions/details',
         files={'file':('audio.wav',wav,'audio/wav')},data=data,headers=gpu_headers(),timeout=930)
     response.raise_for_status()
     result=response.json()
