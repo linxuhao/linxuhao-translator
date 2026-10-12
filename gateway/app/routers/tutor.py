@@ -142,9 +142,8 @@ async def execute_tutor_stream(client: httpx.AsyncClient, payload: dict, chunk_q
             "stream": True,
             "max_tokens": 1024,
             "temperature":0.6, "top_p":0.80, "top_k":20, "min_p":0.0, "presence_penalty":1.5, "repetition_penalty":1.0,
-            "extra_body": {
-                "chat_template_kwargs": {"enable_thinking": False}
-            }
+            # Top level, where llama-server reads it; under extra_body it was ignored and Qwen thought.
+            "chat_template_kwargs": {"enable_thinking": False}
         }
 
         t_llm_start = time.time()

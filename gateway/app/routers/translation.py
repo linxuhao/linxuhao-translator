@@ -139,9 +139,7 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
 1. 迅速判断用户实际说的是哪种语言。
 2. 🚨 【跨语种空耳修复】：如果发现输入的文本毫无逻辑（例如中文里出现“美容骨头公平呀”），请敏锐地意识到这是 ASR 听错了发音。请尝试根据其拼音/发音，逆向推导还原成合理的外语（如法语的 "maison coûte combien"）。
 3. 将还原并锁定后的文本翻译为: {target_lang_full_name}。
-4. 【最高戒律】：直接输出最终的翻译文本！绝对不要输出任何前言、解释、XML标签，也不要重复原文。如果判断用户说的本身就是{target_lang_full_name}，则直接修复错别字后输出原文。
-
-<<DISABLE_THINKING>>"""
+4. 【最高戒律】：直接输出最终的翻译文本！绝对不要输出任何前言、解释、XML标签，也不要重复原文。如果判断用户说的本身就是{target_lang_full_name}，则直接修复错别字后输出原文。"""
 
         messages = [{"role": "system", "content": system_prompt}]
         history_context_text = ""
@@ -180,9 +178,9 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
             "top_p": 0.85,
             "presence_penalty": 1.2,
             "repetition_penalty": 1.05,
-            "extra_body": {
-                "chat_template_kwargs": {"enable_thinking": True}
-            }
+            # Top level: llama-server reads it from the request body (extra_body is only the OpenAI
+            # SDK's way to put it there). With thinking on, the 128 tokens all went to reasoning.
+            "chat_template_kwargs": {"enable_thinking": False}
         }
 
         t_llm_start = time.time()
