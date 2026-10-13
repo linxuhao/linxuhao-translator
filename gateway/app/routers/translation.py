@@ -107,8 +107,8 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
             return
 
         # 2. 语种裁决逻辑 (修复为 Owner-Centric: 异语种全部转母语)
-        detect_result = next((r for r in asr_results if r["mode"] == "detect"), None)
-        detected_lang = detect_result["detected_lang"] if detect_result else native_lang_base
+        source_result = next((r for r in asr_results if r["mode"] == "detect"), asr_results[0])
+        detected_lang = source_result["detected_lang"]
         
         # 核心修正：只要开口说的不是母语，一律翻译为母语。只有当说的是母语时，才翻译为目标外语。
         is_native = (detected_lang == native_lang_base)
@@ -125,10 +125,10 @@ async def execute_stream_pipeline(client: httpx.AsyncClient, payload: dict, chun
         target_lang_full_name = LANGUAGES_ZH.get(target_tts_lang, target_tts_lang).title()
 
         asr_options_text = "\n".join([f"[{r['mode']}] (lang: {r.get('detected_lang', 'unknown')}) {r['text']}" for r in asr_results])
-        first_text = asr_results[0]["text"]
+        source_text = source_result["text"]
         
         await chunk_queue.put({
-            "event": "start", "original_text": first_text,
+            "event": "start", "original_text": source_text,
             "source_lang": actual_source_lang, "target_lang": target_tts_lang,
             "detected_foreign_lang": detected_foreign_lang
         })
