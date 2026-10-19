@@ -3,7 +3,7 @@ import os
 import io
 import wave
 from pathlib import Path
-GPU_URL=os.getenv('GPU_SERVICE_URL','http://linxuhao-ai:9041').rstrip('/')
+GPU_URL=os.getenv('GPU_SERVICE_URL','http://linxuhao-ai-workstation:9041').rstrip('/')
 def gpu_headers():
     token=Path(os.getenv('GPU_TOKEN_FILE','/run/secrets/GPU_API_TOKEN')).read_text().strip()
     if not token:raise RuntimeError('GPU service credential is empty')

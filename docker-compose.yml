@@ -24,10 +24,10 @@ services:
       # The GPU layer's bearer token, as a file (never an env var).
       - ${GPU_LOCK_DIR:-/home/linxuhao/.local/state/vip-gpu}/GPU_API_TOKEN:/run/secrets/GPU_API_TOKEN:ro
     environment:
-      GPU_SERVICE_URL: http://${GPU_HOST:-linxuhao-ai}:9041
+      GPU_SERVICE_URL: http://${GPU_HOST:-linxuhao-ai-workstation}:9041
     # 容器内不走 Tailscale MagicDNS, 所以显式映射 AI 机。
     extra_hosts:
-      - "linxuhao-ai:${LINXUHAO_AI_IP:-100.68.74.107}"
+      - "linxuhao-ai-workstation:${LINXUHAO_AI_IP:-100.104.11.4}"
     restart: unless-stopped
 
 # ==========================================
